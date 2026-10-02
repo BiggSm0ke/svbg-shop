@@ -1,0 +1,167 @@
+#!/bin/sh
+# svbg — управление SvBG Shop на сервере. Ставится установщиком в /usr/local/bin/svbg.
+# Работает с /opt/svbg (или $SVBG_DIR): docker compose плюс команды бота внутри контейнера.
+set -eu
+
+SVBG_DIR=${SVBG_DIR:-/opt/svbg}
+DATA="$SVBG_DIR/data"
+STATE="$SVBG_DIR/install.conf"
+IMAGE=svbg-shop:local
+
+say() { printf '%s\n' "$*"; }
+warn() { printf '! %s\n' "$*" >&2; }
+die() {
+    printf 'Ошибка: %s\n' "$*" >&2
+    exit 1
+}
+
+usage() {
+    cat <<'TXT'
+svbg — управление SvBG Shop
+
+  svbg up | down | restart        запустить / остановить / перезапустить
+  svbg status                     что запущено, адреса, память
+  svbg logs [-f]                  логи бота
+  svbg update [--force]           git pull, сборка образа, бэкап, миграции, перезапуск
+  svbg backup                     бэкап сейчас (в data/backups)
+  svbg restore <файл> [части…]    восстановить бэкап (бот остановится, база очистится)
+  svbg set KEY VALUE              поменять настройку в data/.env (бот применит за ~2 с)
+  svbg edit                       открыть data/.env в редакторе ($EDITOR, по умолчанию nano)
+  svbg owner-link                 одноразовая ссылка владельца
+  svbg show-key                   показать SECRET_KEY (храните в менеджере паролей)
+  svbg version                    версия бота
+TXT
+}
+
+[ -f "$SVBG_DIR/docker-compose.yml" ] || die "бот не установлен ($SVBG_DIR/docker-compose.yml нет). Установка: sudo bash deploy/install.sh"
+cd "$SVBG_DIR"
+
+SVBG_SRC=""
+if [ -f "$STATE" ]; then
+    # shellcheck source=/dev/null
+    . "$STATE"
+fi
+
+if [ -f "$SVBG_DIR/.env" ]; then
+    warn "в $SVBG_DIR лежит .env, бот его НЕ читает. Настройки живут в $DATA/.env (svbg edit)."
+fi
+
+compose() { docker compose "$@"; }
+
+bot_running() {
+    [ -n "$(compose ps --status running -q bot 2>/dev/null)" ]
+}
+
+tty_flag() {
+    if [ -t 0 ] && [ -t 1 ]; then echo ""; else echo "-T"; fi
+}
+
+# Команда бота: в работающем контейнере (exec) или в одноразовом (run --rm).
+in_bot() {
+    if bot_running; then
+        # shellcheck disable=SC2046
+        compose exec $(tty_flag) bot python -m svbg "$@"
+    else
+        # shellcheck disable=SC2046
+        compose run --rm --no-deps $(tty_flag) bot python -m svbg "$@"
+    fi
+}
+
+installer() {
+    [ -n "$SVBG_SRC" ] && [ -f "$SVBG_SRC/deploy/install.sh" ] ||
+        die "не нашёл исходники бота (SVBG_SRC в $STATE). Запустите установщик из папки репозитория: sudo bash deploy/install.sh"
+    exec bash "$SVBG_SRC/deploy/install.sh" "$@"
+}
+
+# svbg set KEY VALUE: значение уходит в контейнер через stdin, а не через argv (его видно в ps).
+cmd_set() {
+    [ $# -ge 1 ] || die "svbg set KEY VALUE  (или svbg set KEY=VALUE)"
+    if [ $# -ge 2 ]; then
+        line="$1=$2"
+    else
+        line=$1
+    fi
+    py='import sys
+from svbg.__main__ import main
+sys.exit(main(["set", sys.stdin.readline().rstrip("\r\n")]))'
+    if bot_running; then
+        printf '%s\n' "$line" | compose exec -T bot python -c "$py"
+    else
+        printf '%s\n' "$line" | compose run --rm --no-deps -T bot python -c "$py"
+    fi
+}
+
+cmd_restore() {
+    [ $# -ge 1 ] || die "укажите файл бэкапа: svbg restore <файл>"
+    mkdir -p "$DATA/restore"
+    chown 1000:1000 "$DATA/restore" 2>/dev/null || true
+    chmod 0700 "$DATA/restore"
+    inside=""
+    for f in "$@"; do
+        [ -f "$f" ] || die "файл не найден: $f"
+        name=$(basename -- "$f")
+        abs="$(cd "$(dirname -- "$f")" && pwd)/$name"
+        case $abs in
+            "$DATA"/*) rel=${abs#"$DATA"/} ;;
+            *)
+                cp -- "$f" "$DATA/restore/$name"
+                chown 1000:1000 "$DATA/restore/$name" 2>/dev/null || true
+                rel="restore/$name"
+                ;;
+        esac
+        inside="$inside /app/data/$rel"
+    done
+    say "Бот остановится, текущая база будет очищена и заменена данными из бэкапа."
+    printf 'Продолжить? Введите yes: '
+    IFS= read -r answer || answer=""
+    [ "$answer" = "yes" ] || die "отменено"
+    if bot_running; then
+        say "Сначала бэкап текущей базы, на всякий случай…"
+        compose exec -T bot python -m svbg backup --reason pre_restore || warn "бэкап перед восстановлением не получился"
+        compose stop bot
+    fi
+    # shellcheck disable=SC2046,SC2086
+    if compose run --rm $(tty_flag) bot python -m svbg restore --wipe --yes $inside; then
+        compose up -d
+        rm -rf "$DATA/restore"
+        say "Готово: бот запущен с восстановленными данными"
+    else
+        warn "восстановление не выполнено, бот не запущен. Исправьте причину и повторите, или: svbg up"
+        exit 1
+    fi
+}
+
+command=${1:-help}
+[ $# -gt 0 ] && shift
+case $command in
+    up | start) compose up -d ;;
+    down | stop) compose down ;;
+    restart) compose restart bot ;;
+    status | ps)
+        if [ -n "$SVBG_SRC" ] && [ -f "$SVBG_SRC/deploy/install.sh" ]; then
+            installer --status
+        fi
+        compose ps
+        ;;
+    logs) compose logs --tail=200 "$@" bot ;;
+    update) installer --update "$@" ;;
+    backup) in_bot backup "$@" ;;
+    restore) cmd_restore "$@" ;;
+    set) cmd_set "$@" ;;
+    edit) "${EDITOR:-nano}" "$DATA/.env" ;;
+    owner-link) in_bot owner-link "$@" ;;
+    show-key) in_bot show-key ;;
+    env) in_bot env "$@" ;;
+    version)
+        if bot_running; then
+            compose exec -T bot python -c 'import svbg; print(svbg.__version__)'
+        else
+            docker image inspect -f '{{.Created}}' "$IMAGE"
+        fi
+        ;;
+    help | -h | --help) usage ;;
+    *)
+        usage
+        exit 2
+        ;;
+esac

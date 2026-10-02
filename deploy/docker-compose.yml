@@ -1,0 +1,67 @@
+# Пример для ручной установки без установщика (бот + свой PostgreSQL). Установщик deploy/install.sh пишет
+# свой /opt/svbg/docker-compose.yml сам, этот файл ему не нужен.
+# Образ собирается из исходников: docker build -t svbg-shop:local .  (публичного образа нет)
+# Настройки бота лежат в data/.env или в самом боте (/settings). Если панели Remnawave на этом сервере нет,
+# уберите четыре строки про сеть remnawave-network (они помечены комментарием).
+name: svbg
+
+services:
+  bot:
+    image: svbg-shop:local
+    container_name: svbg-shop
+    hostname: svbg-shop                      # бот строит сниппеты вебхуков из этого имени
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    volumes:
+      - ./data:/app/data                     # КАТАЛОГ: .env, media/, backups/ (не отдельный файл .env)
+    # env_file: НЕ используется — настройки в data/.env, бот синхронизирует его сам
+    ports:
+      - "127.0.0.1:8080:8080"                # наружу только через reverse-proxy
+    networks:
+      - default
+      - remnawave-network                    # svbg:remnawave-network
+    mem_limit: 512m
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-m", "svbg", "health"]
+      interval: 60s
+      timeout: 10s
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  db:
+    image: postgres:17-alpine
+    container_name: svbg-db
+    restart: unless-stopped
+    command: >-
+      postgres -c shared_buffers=128MB -c max_connections=30 -c work_mem=4MB
+      -c effective_cache_size=384MB
+    volumes:
+      - ./pg:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: svbg
+      POSTGRES_USER: svbg
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg
+    secrets: [pg]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U svbg -d svbg"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    # Внешний PostgreSQL: впишите его DATABASE_URL в data/.env и запускайте только бота:
+    #   docker compose up -d --no-deps bot
+
+networks:                                    # svbg:remnawave-network
+  remnawave-network:                         # svbg:remnawave-network
+    external: true                           # svbg:remnawave-network
+
+secrets:
+  pg:
+    file: ./data/.pg_password                # пароль PostgreSQL: openssl rand -hex 24 > data/.pg_password

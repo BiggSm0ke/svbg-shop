@@ -1,0 +1,15 @@
+# Only pyproject.toml, uv.lock, README.md and svbg/ are needed by the Dockerfile.
+.git
+.venv
+.tools
+.pytest_cache
+.ruff_cache
+**/__pycache__
+**/*.pyc
+data
+deploy
+docs
+tests
+*.md
+!README.md
+.env

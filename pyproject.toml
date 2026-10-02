@@ -1,0 +1,71 @@
+[project]
+name = "svbg"
+version = "0.1.0"
+description = "SvBG Shop — Telegram bot for selling VPN subscriptions on Remnawave"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.13,<3.15"
+dependencies = [
+    "aiogram>=3.31,<3.40",
+    "aiohttp>=3.12,<4",
+    "aiohttp-socks>=0.10",
+    "sqlalchemy[asyncio]>=2.0.40,<2.2",  # asyncio extension needs greenlet (no longer implied by 2.1)
+    "asyncpg>=0.30",
+    "alembic>=1.16",
+    "msgspec>=0.19",
+    "cryptography>=45",
+    "fluent.runtime>=0.4",
+    "segno>=1.6",
+    "pillow>=11",
+    "tzdata>=2025.2",  # IANA zones for zoneinfo on Windows / slim images (TIMEZONE, daily jobs)
+    "uvloop>=0.21; sys_platform != 'win32'",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "pytest-asyncio>=1.0",
+    "pytest-timeout>=2.3",
+    "pytest-xdist>=3.6",
+    "ruff>=0.12",
+    "import-linter>=2.3",
+]
+
+[project.scripts]
+svbg = "svbg.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["svbg"]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+target-version = "py313"
+line-length = 110
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S", "BLE", "T20", "SIM", "RUF", "DTZ", "PL", "TRY"]
+ignore = [
+    "PLR0913", "PLR2004", "PLR0911", "PLR0912", "PLR0915", "TRY003", "TRY300", "RUF001", "RUF002",
+    "RUF003", "S101", "PLC0415", "S608",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "PLR", "BLE", "T20", "ASYNC", "B", "TRY", "DTZ"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+timeout = 120
+markers = [
+    "pg: tests that need a real PostgreSQL",
+    "slow: slow tests",
+]
