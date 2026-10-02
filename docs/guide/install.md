@@ -12,18 +12,12 @@
 
 ## Код
 
-Репозиторий приватный, нужен вход в GitHub:
-
 ```bash
 sudo -i
-apt update && apt install -y git gh
-gh auth login
-gh auth setup-git
+apt update && apt install -y git
 git clone https://github.com/BiggSm0ke/svbg-shop.git /opt/svbg-shop
 cd /opt/svbg-shop
 ```
-
-Вместо `gh` подойдёт fine-grained токен с правом Contents: Read-only на этот репозиторий: `git clone` спросит логин и токен вместо пароля. Чтобы `svbg update` потом не спрашивал их снова, перед клонированием выполните `git config --global credential.helper store` (токен ляжет в `/root/.git-credentials` открытым текстом).
 
 Папка с кодом нужна и после установки: из неё собирается образ (`docker build -t svbg-shop:local .`, публичного образа нет) и в ней `svbg update` делает `git pull`. Её путь установщик запоминает в `/opt/svbg/install.conf`.
 
@@ -136,7 +130,7 @@ svbg update
 4. Бот останавливается, миграции базы (`python -m svbg migrate`, перед изменением схемы он сам делает ещё бэкап `pre_migrate`).
 5. Запуск и проверка, что бот отвечает.
 
-Не смог сделать `git pull` (нет доступа к репозиторию): предупредит и соберёт то, что лежит в папке. Проверьте вход: `gh auth status`.
+Не смог сделать `git pull` (нет сети до GitHub или в папке есть локальные правки): предупредит и соберёт то, что лежит в папке.
 
 Откат:
 

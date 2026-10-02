@@ -95,7 +95,6 @@ Telegram-бот для продажи VPN-подписок на панели Rem
 | Диск | от 5 ГБ свободно для установки с нуля, 3 ГБ для одного бота |
 | Порты | 80 и 443 свободны (на них встанет Caddy) |
 | Telegram | токен бота от [@BotFather](https://t.me/BotFather) |
-| Доступ к репозиторию | репозиторий приватный: нужен аккаунт GitHub с доступом к нему |
 
 ### Домен
 
@@ -111,35 +110,12 @@ Telegram-бот для продажи VPN-подписок на панели Rem
 
 ### Шаг 1. Скачать код
 
-Репозиторий приватный, поэтому сначала вход в GitHub. Проще всего через GitHub CLI:
-
 ```bash
 sudo -i
-apt update && apt install -y git gh
-gh auth login          # GitHub.com → HTTPS → Login with a web browser
-gh auth setup-git      # git будет брать вход из gh, понадобится для обновлений
+apt update && apt install -y git
 git clone https://github.com/BiggSm0ke/svbg-shop.git /opt/svbg-shop
 cd /opt/svbg-shop
 ```
-
-`gh auth login` покажет код: откройте на телефоне или компьютере github.com/login/device и введите его.
-
-<details>
-<summary>Без gh, через токен</summary>
-
-1. На GitHub: Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token.
-2. Repository access: только `svbg-shop`. Permissions → Contents: Read-only.
-3. На сервере:
-
-```bash
-git config --global credential.helper store   # запомнить токен для svbg update
-git clone https://github.com/BiggSm0ke/svbg-shop.git /opt/svbg-shop
-# Username: ваш логин GitHub, Password: токен
-```
-
-Токен ляжет в `/root/.git-credentials` открытым текстом. Если так не хочется, не включайте `credential.helper` и вводите токен при каждом обновлении.
-
-</details>
 
 Папку `/opt/svbg-shop` не удаляйте: из неё собирается образ бота и берутся обновления.
 

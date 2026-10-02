@@ -1548,7 +1548,7 @@ git_pull() {
     if run "${g[@]}"; then
         ok "Код: $(git -C "$SRC_DIR" -c "safe.directory=$SRC_DIR" log -1 --format='%h %s' 2>/dev/null || echo обновлён)"
     else
-        warn "git pull не прошёл (нет доступа к приватному репозиторию или есть локальные правки). Проверьте: gh auth status. Собираю текущую версию."
+        warn "git pull не прошёл (нет сети до GitHub или есть локальные правки). Проверьте: git -C $SRC_DIR status. Собираю текущую версию."
     fi
 }
 
