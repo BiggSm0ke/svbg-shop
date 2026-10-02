@@ -4,7 +4,8 @@ Per callback:
 
 1. decode ``callback_data`` (``v1`` codec; long args resolved through ``short_tokens``);
    unknown/old/expired → the home screen with the toast "Меню обновилось";
-2. load :class:`UserCtx` (the app's loader is LRU-cached) and check the screen's or action's
+2. load :class:`UserCtx` (the app's loader is LRU-cached); the optional ``gate`` (the user path's entry
+   captcha) may answer the callback with its own result instead; then check the screen's or action's
    ``required_role`` / ``perm`` — on **every** callback; denial → toast "Нет прав" and the ``on_denied`` hook;
 3. answer the callback query right away (screens: immediately; actions: as soon as the handler returns or
    after ``answer_deadline``, whichever is first, so the handler's toast can be shown);
@@ -48,8 +49,10 @@ from aiogram.types import User as TgUser
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from svbg.content import defaults
+from svbg.content.banner import CAPTION_LIMIT, is_banner
 from svbg.core.errors import Capturer, timeout_guard
 from svbg.core.log import mask, register_secret
+from svbg.tg.banner import banner_scope, is_media_error
 from svbg.tg.ui import codec as codec_mod
 from svbg.tg.ui import forms as forms_mod
 from svbg.tg.ui import texts
@@ -65,6 +68,7 @@ from svbg.tg.ui.renderer import (
     content_view,
     nav_button,
     plan_transition,
+    visible_len,
 )
 from svbg.tg.ui.tables import ui_state
 from svbg.tg.ui.view import MediaRef, Redirect, Toast, View
@@ -75,6 +79,7 @@ if TYPE_CHECKING:
     from svbg.content.model import Media
     from svbg.content.store import ContentSnapshot, ContentStore, ScreenEntry
     from svbg.db.engine import Database
+    from svbg.tg.banner import BannerPolicy
     from svbg.tg.notifier import Notifier
     from svbg.tg.ui.codec import CallbackCodec, Decoded
     from svbg.tg.ui.forms import Form
@@ -83,6 +88,7 @@ __all__ = [
     "Access",
     "AccessDeniedError",
     "BotTransport",
+    "Gate",
     "HandlerResult",
     "MediaRef",
     "Redirect",
@@ -105,6 +111,8 @@ ScreenFn = Callable[["ScreenCtx", Any], Awaitable[View | Redirect]]
 ActionFn = Callable[["ScreenCtx", Any], Awaitable[HandlerResult]]
 UserLoader = Callable[[TgUser], Awaitable[UserCtx | None]]
 DeniedHook = Callable[[UserCtx, str], Awaitable[None] | None]
+#: ``(ctx, decoded callback or None if stale)`` → a result that replaces the callback; ``None`` to go on.
+Gate = Callable[["ScreenCtx", "Decoded | None"], Awaitable[HandlerResult]]
 
 RESERVED: Final = frozenset({SYSTEM_SCREEN, MODULE_SCREEN, forms_mod.FORM_SCREEN, "ui"})
 MAX_REDIRECTS: Final = 3
@@ -490,6 +498,8 @@ class ScreenRouter:
         media_root: Path | None = None,
         on_denied: DeniedHook | None = None,
         lock_wait: float | None = None,
+        gate: Gate | None = None,
+        banner: BannerPolicy | None = None,
     ) -> None:
         self.transport = transport
         self.user_loader = user_loader
@@ -509,6 +519,8 @@ class ScreenRouter:
         self.media_url = media_url
         self._media_root = media_root.resolve() if media_root is not None else None
         self.on_denied = on_denied
+        #: Runs before every callback is routed (set by the user path: the entry captcha).
+        self.gate = gate
         self._screens: dict[str, _ScreenRoute] = {}
         self._actions: dict[tuple[str, str], _ActionRoute] = {}
         self._policies: dict[str, Access] = {
@@ -516,9 +528,12 @@ class ScreenRouter:
         }
         self.forms: dict[str, Form] = {}
         self._locks = _KeyedLocks()
+        #: The default banner on code-built views too (:mod:`svbg.tg.banner`); ``None`` = views go as built.
+        self.banner = banner
         #: One first upload per content media at a time: concurrent first sends (the default banner is on
         #: every screen) wait for it and reuse the learned ``file_id`` instead of uploading the file again.
-        self._uploads: dict[int, asyncio.Lock] = {}
+        #: Shared with the banner middleware, so a click and a notification never upload it twice.
+        self._uploads: dict[int, asyncio.Lock] = banner.locks if banner is not None else {}
 
     # ------------------------------------------------------------ registration
 
@@ -645,6 +660,11 @@ class ScreenRouter:
         decoded = codec_mod.decode(data)
         if decoded is not None and decoded.token is not None:
             decoded = None if self.codec is None else await self.codec.resolve(decoded)
+        if self.gate is not None:
+            gated = await self.gate(ctx, decoded)
+            if gated is not None:
+                await self._apply_result(ctx, gated, depth=0)
+                return
         if decoded is None:
             await self._stale(ctx)
             return
@@ -854,6 +874,7 @@ class ScreenRouter:
         with_media: bool = True,
     ) -> View:
         media_ref: MediaRef | None = None
+        media: Media | None = None
         preview_url: str | None = None
         if with_media and entry.screen.media_id is not None and self.content is not None:
             media = self.content.get_media(entry.screen.media_id)
@@ -869,7 +890,7 @@ class ScreenRouter:
                     media_ref = MediaRef(media.kind, preview_url, f"m:{media.id}", media.id)
                 else:
                     media_ref = self._media_ref(media)
-        return content_view(
+        view = content_view(
             entry,
             ctx.user,
             media=media_ref,
@@ -877,21 +898,60 @@ class ScreenRouter:
             extra_rows=extra_rows,
             bot_username=self.transport.bot_username,
         )
+        if (
+            view.media is not None
+            and entry.screen.media_mode == "preview"
+            and is_banner(media)
+            and visible_len(view.text) > CAPTION_LIMIT
+        ):
+            view.media = None  # no PUBLIC_URL for the preview: the banner never cuts the text
+        if not with_media and entry.screen.media_id is not None:
+            view.picture = entry.screen.media_id  # the fallback: the screen's picture if cached, no upload
+        return view
 
     # ------------------------------------------------------------ delivery
 
     async def _call(self, method: TelegramMethod[T], chat_id: int, *, retry: bool = True) -> T | None:
         """``transport.call`` waiting out a short flood-control pause once (inside the caller's timeout)."""
         try:
-            return await self.transport.call(method, chat_id=chat_id)
+            return await self.call_decided(method, chat_id)
         except TelegramRetryAfter as e:
             if not retry or e.retry_after > RETRY_AFTER_MAX:
                 raise
             log.debug("flood control in chat %s: retry in %ss", chat_id, e.retry_after)
             await asyncio.sleep(max(e.retry_after, 0))
-        return await self.transport.call(method, chat_id=chat_id)
+        return await self.call_decided(method, chat_id)
+
+    async def call_decided(self, method: TelegramMethod[T], chat_id: int) -> T | None:
+        """``transport.call`` for a message whose look the router already chose (the banner middleware
+        leaves it as is)."""
+        with banner_scope("decided"):
+            return await self.transport.call(method, chat_id=chat_id)
 
     async def _deliver(self, ctx: ScreenCtx, view: View, *, retry: bool = True) -> None:
+        if self.banner is None:
+            await self._deliver_media(ctx, view, retry=retry)
+            return
+        dressed = self.banner.dress(
+            view, bot_id=self.transport.bot_id, allow_upload=retry, group=ctx.chat_id < 0
+        )
+        if dressed is view or dressed.media is None:
+            await self._deliver_media(ctx, dressed, retry=retry)
+            return
+        try:
+            await self._deliver_media(ctx, dressed, retry=retry)
+        except TelegramBadRequest as e:
+            if not is_media_error(e):
+                raise
+            # the banner's file_id went stale or the chat refuses pictures: never lose the message for it
+            media = self.content.get_media(dressed.media.media_id) if self.content is not None else None
+            bot_id = self.transport.bot_id
+            if media is not None and bot_id is not None and isinstance(dressed.media.file, str):
+                await self.banner.forget(bot_id, media)
+            log.warning("banner refused in chat %s (%s); sent without it", ctx.chat_id, e.message)
+            await self._deliver_media(ctx, view, retry=retry)
+
+    async def _deliver_media(self, ctx: ScreenCtx, view: View, *, retry: bool = True) -> None:
         media = view.media
         if (
             media is None
@@ -971,7 +1031,7 @@ class ScreenRouter:
 
     async def _delete_quietly(self, chat_id: int, message_id: int) -> None:
         try:
-            await self.transport.call(DeleteMessage(chat_id=chat_id, message_id=message_id), chat_id=chat_id)
+            await self.call_decided(DeleteMessage(chat_id=chat_id, message_id=message_id), chat_id)
         except TelegramAPIError as e:  # older than 48 h, already deleted, ...
             log.debug("could not delete old message: %s", e.message)
 

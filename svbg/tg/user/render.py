@@ -6,7 +6,8 @@ Two entry points:
   preview, visibility of system buttons for the enriched :class:`UserCtx`), then the screen's live
   ``{placeholders}`` and the dynamic rows (plans, periods, payment methods…);
 * :func:`plain_view` — outside a click (billing's messages, notifications, background jobs): the same text and
-  buttons without media.
+  buttons; the media is not attached here, the view only says which picture the screen has (``picture``: the
+  owner's own one, ``banner=False``: removed) and the banner middleware shows it.
 
 When the content store has no enabled screen with the code, the default from :mod:`svbg.tg.user.seeds` is
 used, so a screen is never empty. Placeholders are substituted safely (``{name}`` only, no ``str.format``)
@@ -20,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from svbg.content.banner import is_banner
 from svbg.content.model import Button, ContentError, parse_action, parse_label
 from svbg.content.store import KeyboardTemplate, compile_keyboard
 from svbg.tg.ui.conditions import ConditionError
@@ -137,8 +139,9 @@ def plain_view(
     bot_username: str | None = None,
     fallback_text: str | None = None,
 ) -> View:
-    """Screen ``code`` without a click: content text and buttons (no media), else the seed, else
-    ``fallback_text``."""
+    """Screen ``code`` without a click: content text and buttons, else the seed, else ``fallback_text``.
+
+    The view carries the screen's picture choice (:class:`View` ``picture`` / ``banner``), not the media."""
     vals = {**user.placeholders(), **dict(values or {})}
     entry = _entry(content, code)
     if entry is not None:
@@ -164,4 +167,11 @@ def plain_view(
         )
     if not text.strip():
         text, entities = ELLIPSIS, []
-    return View(text=text, entities=to_entities(entities), keyboard=_merge(top, keyboard, bottom))
+    view = View(text=text, entities=to_entities(entities), keyboard=_merge(top, keyboard, bottom))
+    if entry is not None:
+        media_id = entry.screen.media_id
+        if media_id is None:
+            view.banner = False  # the owner removed this screen's picture
+        elif content is not None and not is_banner(content.get_media(media_id)):
+            view.picture = media_id  # the owner's own picture instead of the default banner
+    return view

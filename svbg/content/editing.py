@@ -83,6 +83,7 @@ __all__ = [
     "NotFoundError",
     "StaleError",
     "migrate_default_banner",
+    "retire_system_buttons",
     "utf16_len",
 ]
 
@@ -346,6 +347,184 @@ async def migrate_default_banner(conn: AsyncConnection, media_id: int, *, previe
     if skipped:
         log.warning("default banner: %s", _skipped_text(skipped))
     log.info("default banner: put on %d screen(s) without a picture", changed)
+    return changed
+
+
+RETIRED_SUMMARY: Final = "🧹 Убраны старые кнопки сотрудников (всё теперь в «🛠 Админка»)"
+
+
+async def retire_system_buttons(
+    conn: AsyncConnection, retired: Sequence[tuple[str, defaults.SeedButton]] | None = None
+) -> int:
+    """Delete system buttons that are no longer seeded, but only rows still equal to their old seed (label,
+    action, condition): a button the owner edited stays. One audited batch per screen (no actor), so
+    «↩️ Отменить» in the constructor's history brings them back. Returns how many rows were deleted."""
+    retired = defaults.RETIRED_SYSTEM_BUTTONS if retired is None else retired
+    by_screen: dict[str, list[defaults.SeedButton]] = {}
+    for code, seed in retired:
+        by_screen.setdefault(code, []).append(seed)
+    deleted = 0
+    for code, seeds in by_screen.items():
+        screen = (
+            (await conn.execute(sa.select(screens).where(screens.c.code == code).with_for_update()))
+            .mappings()
+            .first()
+        )
+        if screen is None:
+            continue
+        keys = [s.system_key for s in seeds]
+        rows = (
+            (
+                await conn.execute(
+                    sa.select(screen_buttons)
+                    .where(screen_buttons.c.screen_id == screen["id"], screen_buttons.c.system_key.in_(keys))
+                    .with_for_update()
+                )
+            )
+            .mappings()
+            .all()
+        )
+        wanted = {s.system_key: s for s in seeds}
+        stale = [
+            r
+            for r in rows
+            if (seed := wanted.get(str(r["system_key"]))) is not None
+            and r["label"] == dict(seed.label)
+            and r["action"] == dict(seed.action)
+            and (r["visible_if"] or None) == (dict(seed.visible_if) if seed.visible_if is not None else None)
+        ]
+        if not stale:
+            continue
+        audit = _Audit(conn, uuid.uuid4().hex, None)
+        for r in stale:
+            await conn.execute(sa.delete(screen_buttons).where(screen_buttons.c.id == r["id"]))
+            audit.add("button", r["id"], _row_dict(r, _BUTTON_FIELDS), None)
+        new = (
+            (
+                await conn.execute(
+                    sa.update(screens)
+                    .where(screens.c.id == screen["id"])
+                    .values(version=screens.c.version + 1, updated_at=sa.func.now())
+                    .returning(screens)
+                )
+            )
+            .mappings()
+            .one()
+        )
+        audit.add("screen", screen["id"], _row_dict(screen, _SCREEN_FIELDS), _row_dict(new, _SCREEN_FIELDS))
+        audit.add(NOTE, screen["id"], None, {"summary": RETIRED_SUMMARY})
+        await audit.flush()
+        deleted += len(stale)
+        log.info("content: retired %d old system button(s) of «%s»", len(stale), code)
+    return deleted
+
+
+RELAYOUT_SUMMARY: Final = (
+    "🧭 Главное меню по-новому: «📱 Подписка» вместо «Купить», «Продлить» и «Устройства»"
+)
+
+
+def _same_as_seed(row: Mapping[str, Any], seed: defaults.SeedButton) -> bool:
+    return (
+        row["label"] == dict(seed.label)
+        and row["action"] == dict(seed.action)
+        and (row["visible_if"] or None) == (dict(seed.visible_if) if seed.visible_if is not None else None)
+        and int(row["row"]) == seed.row
+        and int(row["sort"]) == seed.sort
+        and (row["style"] or None) == seed.style
+        and (row["icon_custom_emoji_id"] or None) == seed.icon_custom_emoji_id
+        and row["enabled"] is not False
+    )
+
+
+async def relayout_system_buttons(
+    conn: AsyncConnection,
+    moves: Sequence[tuple[str, defaults.SeedButton, defaults.SeedButton | None]] | None = None,
+) -> int:
+    """Move system buttons whose seed changed to the new seed (``None``: delete), but only rows still equal to
+    their old seed in every field the constructor edits: a button the owner touched stays as it is. One
+    audited batch per screen, so «↩️ Отменить» in the constructor's history brings the old layout back.
+    Returns how many rows changed."""
+    moves = defaults.RELAYOUT_SYSTEM_BUTTONS if moves is None else moves
+    by_screen: dict[str, dict[str, tuple[defaults.SeedButton, defaults.SeedButton | None]]] = {}
+    for code, old, new in moves:
+        by_screen.setdefault(code, {})[old.system_key] = (old, new)
+    changed = 0
+    for code, wanted in by_screen.items():
+        screen = (
+            (await conn.execute(sa.select(screens).where(screens.c.code == code).with_for_update()))
+            .mappings()
+            .first()
+        )
+        if screen is None:
+            continue
+        rows = (
+            (
+                await conn.execute(
+                    sa.select(screen_buttons)
+                    .where(
+                        screen_buttons.c.screen_id == screen["id"],
+                        screen_buttons.c.system_key.in_(list(wanted)),
+                    )
+                    .with_for_update()
+                )
+            )
+            .mappings()
+            .all()
+        )
+        stale = [
+            (r, wanted[str(r["system_key"])][1])
+            for r in rows
+            if _same_as_seed(r, wanted[str(r["system_key"])][0])
+        ]
+        if not stale:
+            continue
+        audit = _Audit(conn, uuid.uuid4().hex, None)
+        for r, new in stale:
+            if new is None:
+                await conn.execute(sa.delete(screen_buttons).where(screen_buttons.c.id == r["id"]))
+                audit.add("button", r["id"], _row_dict(r, _BUTTON_FIELDS), None)
+                continue
+            after = (
+                (
+                    await conn.execute(
+                        sa.update(screen_buttons)
+                        .where(screen_buttons.c.id == r["id"])
+                        .values(
+                            label=dict(new.label),
+                            action=dict(new.action),
+                            visible_if=dict(new.visible_if) if new.visible_if is not None else sa.null(),
+                            row=new.row,
+                            sort=new.sort,
+                            style=new.style,
+                            icon_custom_emoji_id=new.icon_custom_emoji_id,
+                        )
+                        .returning(screen_buttons)
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            audit.add("button", r["id"], _row_dict(r, _BUTTON_FIELDS), _row_dict(after, _BUTTON_FIELDS))
+        new_screen = (
+            (
+                await conn.execute(
+                    sa.update(screens)
+                    .where(screens.c.id == screen["id"])
+                    .values(version=screens.c.version + 1, updated_at=sa.func.now())
+                    .returning(screens)
+                )
+            )
+            .mappings()
+            .one()
+        )
+        audit.add(
+            "screen", screen["id"], _row_dict(screen, _SCREEN_FIELDS), _row_dict(new_screen, _SCREEN_FIELDS)
+        )
+        audit.add(NOTE, screen["id"], None, {"summary": RELAYOUT_SUMMARY})
+        await audit.flush()
+        changed += len(stale)
+        log.info("content: %d system button(s) of «%s» moved to the new layout", len(stale), code)
     return changed
 
 

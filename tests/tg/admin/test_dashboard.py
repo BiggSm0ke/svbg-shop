@@ -1,15 +1,27 @@
-"""«🛠 Админка»: dashboard numbers (owner's time zone, revenue = real paid payments), access, cache,
-refusal."""
+"""«📊 Статистика»: dashboard numbers (owner's time zone, revenue = real paid payments), access, cache,
+refusal; the three lines of the same cached numbers on the admin root."""
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from svbg.core.clock import now
-from svbg.tg.admin.dashboard import ACTIONS, SCREEN, Dashboard, collect, windows
+from svbg.tg.admin.dashboard import (
+    ACTIONS,
+    SCREEN,
+    Dashboard,
+    PlanSales,
+    Revenue,
+    Stats,
+    collect,
+    render_stats,
+    windows,
+)
+from svbg.tg.report import PRE_WIDTH, cell_width
 from svbg.tg.ui.codec import encode
 from tests.dbkit import CountingDatabase, add_user
 from tests.tg.admin.users.kit import (
@@ -84,6 +96,19 @@ async def seed(env: UEnv) -> None:
     )
     await db.raw("update attention_items set resolved_at = now() where dedup_key = 'c'")
     await db.raw("update attention_items set snoozed_until = now() + interval '1 day' where dedup_key = 'd'")
+    # plan sales: paid orders of the last 30 days (a draft and an old one are not counted)
+    month = await db.raw(
+        "insert into plans (code, name) values ('m1', '{\"ru\": \"Месяц\"}'::jsonb) returning id"
+    )
+    for status, days in (("fulfilled", 1), ("paid", 5), ("draft", 1), ("fulfilled", 40)):
+        await db.raw(
+            "insert into orders (user_id, kind, status, currency, total_minor, plan_id, paid_at) "
+            "values ($1, 'new', $2, 'RUB', 17900, $3, now() - make_interval(days => $4))",
+            u1,
+            status,
+            month[0]["id"],
+            days,
+        )
 
 
 async def test_collect(env: UEnv) -> None:
@@ -102,15 +127,19 @@ async def test_collect(env: UEnv) -> None:
     assert stats.active_paid == 1 and stats.active_trial == 1 and stats.churn_7d == 1
     assert stats.attention_count == 2
     assert stats.attention_top[0] == ("error", "Панель недоступна")
+    assert [(p.title, p.currency, p.count, p.amount) for p in stats.plans] == [("Месяц", "RUB", 2, 35800)]
 
 
 async def test_dashboard_screen_for_admin_with_stats(env: UEnv) -> None:
     await seed(env)
     await env.click(ADMIN_STATS, encode(SCREEN))
     text = env.text
-    assert "Выручка" in text and "RollyPay" in text and "Звёзды" in text and "Итого RUB" in text
-    assert "Пробные: 1 · 1 · 2" in text and "1 из 2 (50%)" in text
-    assert "1 платных, 1 пробных" in text and "Истекли за 7 дн. и не продлены: 1" in text
+    assert "💵 <b>Выручка, ₽</b>\n<pre>Касса" in text and "💵 <b>Выручка, ⭐</b>" in text
+    # cash desks × today / 7 / 30 days in whole units (one desk per currency here: no total row)
+    assert re.search(r"RollyPay +(179|678) +678 +1\xa0577</pre>", text) and "Звёзды" in text
+    assert re.search(r"Месяц +2 +358</pre>", text)
+    assert re.search(r"Пробные +1 +1 +2</pre>", text) and "<b>1 из 2</b> (50%)" in text
+    assert "<b>1</b> платных, <b>1</b> пробных" in text and "Истекли за 7 дн. и не продлены: <b>1</b>" in text
     assert "Требует внимания</b>: 2" in text and "🔴 Панель недоступна" in text
     labels = env.labels()
     assert "🔄 Обновить" in labels and "👥 Роли" not in labels and "📦 Тарифы" not in labels
@@ -118,38 +147,44 @@ async def test_dashboard_screen_for_admin_with_stats(env: UEnv) -> None:
 
 async def test_support_sees_no_numbers(env: UEnv) -> None:
     await seed(env)
-    await env.click(SUPPORT, encode(SCREEN))
-    assert "Выручка" not in env.text and "Найдите пользователя" in env.text
-    assert "🔍 Найти пользователя" in env.labels() and "🔄 Обновить" not in env.labels()
+    await env.click(SUPPORT, encode("adm"))
+    assert "Выручка" not in env.text and "пришлите сюда его ID" in env.text
+    assert "🔍 Найти пользователя" in env.labels()
+    assert env.button("Обновить") == encode("adm")  # no numbers to refresh: just the screen again
     await env.click(SUPPORT, encode(ACTIONS, "rf"))
+    assert env.toasts[-1] == "Нет прав"
+    await env.click(SUPPORT, encode(SCREEN))
     assert env.toasts[-1] == "Нет прав"
 
 
-async def test_owner_sees_every_section(env: UEnv) -> None:
+async def test_root_live_line_and_full_numbers(env: UEnv) -> None:
+    await seed(env)
+    await env.click(OWNER, encode("adm"))
+    text = env.text
+    assert "Выручка: сегодня" in text and "за 30 дней" in text
+    assert "Активных подписок: 1, пробных: 1" in text and "Требует внимания: 2" in text
+    assert "RollyPay" not in text  # the split by cash desk is on «📊 Статистика»
+    await env.press(OWNER, "📊 Статистика")
+    assert "RollyPay" in env.text and "Оплат за 30 дней не было" not in env.text
+    assert env.labels()[-2:] == ["🛠 Админка"] or "🛠 Админка" in env.labels()
+
+
+async def test_owner_stats_screen_is_calm_without_data(env: UEnv) -> None:
     await env.click(OWNER, encode(SCREEN))
-    labels = env.labels()
-    for label in (
-        "🔍 Найти пользователя",
-        "🔄 Обновить",
-        "👥 Роли",
-        "📦 Тарифы",
-        "⚙️ Настройки",
-        "🩺 Состояние",
-    ):
-        assert label in labels
     assert "Оплат за 30 дней не было" in env.text and "Всё в порядке" in env.text
+    assert "🔄 Обновить" in env.labels() and "🛠 Админка" in env.labels()
 
 
 async def test_numbers_are_cached_and_refreshed_on_demand(env: UEnv) -> None:
     await env.click(ADMIN, encode(SCREEN))
-    assert "Новые пользователи: 5 · 5 · 5" in env.text
+    assert re.search(r"Новые +5 +5 +5", env.text)
     await add_user(env.db, 9100)
     before = env.db.queries
     await env.click(ADMIN, encode(SCREEN))
     assert env.db.queries - before <= 1  # cached: no statistics SQL
-    assert "Новые пользователи: 5 · 5 · 5" in env.text
+    assert re.search(r"Новые +5 +5 +5", env.text)
     await env.press(ADMIN, "Обновить")
-    assert "Новые пользователи: 6 · 6 · 6" in env.text and env.toasts[-1] == "Обновлено"
+    assert re.search(r"Новые +6 +6 +6", env.text) and env.toasts[-1] == "Обновлено"
 
 
 async def test_failure_keeps_the_screen_alive(env: UEnv) -> None:
@@ -166,10 +201,45 @@ async def test_failure_keeps_the_screen_alive(env: UEnv) -> None:
 
 
 async def test_admin_command(env: UEnv) -> None:
-    from svbg.tg.admin.dashboard import DashboardScreens
+    from svbg.tg.admin.menu import AdminMenu
 
-    screens = DashboardScreens(env.router, env.dashboard)  # handle_command only (screens already installed)
+    screens = AdminMenu(env.router, env.dashboard)  # handle_command only (screens already installed)
     assert await screens.handle_command(text_message(SUPPORT, "/admin"))
     assert "Админка" in env.text
     assert not await screens.handle_command(text_message(5005, "/admin"))
     assert not await screens.handle_command(text_message(OWNER, "/admin", chat_type="group"))
+
+
+def test_render_stats_tables() -> None:
+    at = datetime(2026, 10, 2, 11, 0, tzinfo=UTC)
+    stats = Stats(
+        at=at,
+        new_users=(3, 41, 1180),
+        trials=(1, 12, 60),
+        trials_converted=21,
+        active_paid=340,
+        active_trial=25,
+        churn_7d=4,
+        attention_count=0,
+        attention_top=(),
+        revenue=(
+            Revenue("RollyPay", "RUB", 17900, 67800, 1577000),
+            Revenue("ЮKassa основная касса", "RUB", 0, 49950, 1234500),
+            Revenue("Третья", "RUB", 100, 100, 100),
+        ),
+        plans=(PlanSales("Год семейный безлимит", "RUB", 2, 898000),),
+    )
+    text = "\n".join(render_stats(stats, UTC, max_rows=2))
+    tables = [t.replace("\xa0", "_").split("\n") for t in re.findall(r"<pre>(.*?)</pre>", text, re.S)]
+    assert len(tables) == 3  # revenue, plans, people
+    revenue = tables[0]
+    assert revenue[0].split() == ["Касса", "Сегодня", "7", "дн", "30", "дн"]
+    assert revenue[2].split() == ["RollyPay", "179", "678", "15_770"]
+    assert revenue[3].startswith("ЮKassa осн…")  # clipped to keep the row on a phone screen
+    assert revenue[4].startswith("─") and revenue[5].split() == ["Итого", "180", "1_178", "28_116"]
+    assert "и ещё касс: 1 (они вошли в итог)" in text
+    assert tables[1][0].split() == ["Тариф", "Шт", "Сумма,", "₽"]
+    assert tables[1][2].split() == ["Год", "семейный", "безлим…", "2", "8_980"]
+    assert tables[2][2].split() == ["Новые", "3", "41", "1_180"]
+    assert all(cell_width(line) <= PRE_WIDTH for t in tables for line in t)
+    assert "Всё в порядке" in text

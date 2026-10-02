@@ -27,12 +27,17 @@ from tests.e2e.test_stage2_kit import GROUP, OWNER_ID, Shop, open_shop, until, u
 pytestmark = pytest.mark.pg
 
 
+def _shown(msg: dict[str, Any] | None) -> str:
+    """Text of a message as Telegram shows it: the text, or the caption of a picture (the default banner)."""
+    return str((msg or {}).get("text") or (msg or {}).get("caption") or "")
+
+
 def group_texts(shop: Shop, thread: int | None = None) -> list[str]:
     return [
-        str(c.params.get("text"))
+        c.text
         for c in shop.tg.calls
         if c.ok
-        and c.method in ("sendMessage", "editMessageText")
+        and c.method in ("sendMessage", "sendPhoto", "editMessageText", "editMessageCaption")
         and c.params.get("chat_id") == GROUP
         and (thread is None or c.params.get("message_thread_id") == thread)
     ]
@@ -125,6 +130,7 @@ async def test_purchase_with_enough_balance(start_app: StartApp, app_env: AppEnv
         boris = shop.person(5_002)
         await boris.start()
         await shop.fund(5_002, 20_000)
+        await boris.press("Подписка", expect="📱 Подписка")
         await boris.press("Купить подписку", expect="Выберите срок")
         await boris.press("1 мес.", expect="Спишем с баланса 179 ₽, останется 21 ₽.")
         await boris.press("Оплатить 179")
@@ -154,6 +160,7 @@ async def test_shortfall_tops_up_with_rollypay_and_completes_by_itself(
         vera = shop.person(5_003)
         main = await vera.start()
         await shop.fund(5_003, 5_000)
+        await vera.press("Подписка", expect="📱 Подписка")
         await vera.press("Купить подписку", expect="Выберите срок")
         await vera.press("1 мес.", expect="Не хватает 129 ₽")
         # RollyPay takes at least 179 ₽: the button offers 179 ₽, the surplus stays on the balance
@@ -185,6 +192,7 @@ async def test_payment_after_the_window_lands_on_the_balance_with_a_notice(
     async with open_shop(start_app, app_env) as shop:
         gleb = shop.person(5_004)
         main = await gleb.start()
+        await gleb.press("Подписка", expect="📱 Подписка")
         await gleb.press("Купить подписку", expect="Выберите срок")
         await gleb.press("1 мес.", expect="Не хватает 179 ₽")
         await gleb.press("СБП", expect="Счёт на 179 ₽ готов")
@@ -211,6 +219,7 @@ async def test_two_concurrent_webhooks_credit_once_and_fulfill_once(
     async with open_shop(start_app, app_env) as shop:
         dana = shop.person(5_005)
         main = await dana.start()
+        await dana.press("Подписка", expect="📱 Подписка")
         await dana.press("Купить подписку", expect="Выберите срок")
         await dana.press("1 мес.", expect="Не хватает 179 ₽")
         await dana.press("СБП", expect="Счёт на 179 ₽ готов")
@@ -247,6 +256,7 @@ async def test_double_tap_on_pay_debits_once(start_app: StartApp, app_env: AppEn
         egor = shop.person(5_006)
         main = await egor.start()
         await shop.fund(5_006, 40_000)
+        await egor.press("Подписка", expect="📱 Подписка")
         await egor.press("Купить подписку", expect="Выберите срок")
         await egor.press("1 мес.", expect="Спишем с баланса 179 ₽")
         data = str(egor.button("Оплатить 179").get("callback_data"))
@@ -287,6 +297,7 @@ async def test_stars_invoice_pre_checkout_and_successful_payment(
     async with open_shop(start_app, app_env) as shop:
         zoya = shop.person(5_008)
         main = await zoya.start()
+        await zoya.press("Подписка", expect="📱 Подписка")
         await zoya.press("Купить подписку", expect="Выберите срок")
         await zoya.press("1 мес.", expect="Не хватает 179 ₽")
         await zoya.press("Stars", expect="Счёт на")
@@ -328,23 +339,26 @@ async def test_manual_transfer_receipt_card_rights_and_confirmation(
         begin = len(shop.tg.calls)
         shop.tg.push_photo(5_009, "receipt-photo-1", caption="перевёл")
         await shop.tg.wait_for(
-            "sendMessage",
-            lambda c: c.params.get("chat_id") == 5_009 and "Чек получен" in str(c.params.get("text")),
+            "sendMessage|sendPhoto",
+            lambda c: c.params.get("chat_id") == 5_009 and "Чек получен" in c.text,
             15,
             start=begin,
         )
         payments_thread = await thread_of(shop, "payments")
         card = await shop.tg.wait_for(
-            "sendMessage",
-            lambda c: (
-                c.ok and c.params.get("chat_id") == GROUP and "Чек ручной оплаты" in str(c.params["text"])
-            ),
+            "sendMessage|sendPhoto",
+            lambda c: c.ok and c.params.get("chat_id") == GROUP and "Чек ручной оплаты" in str(c.text),
             15,
             start=begin,
         )
         assert card.params.get("message_thread_id") == payments_thread
         photo = await shop.tg.wait_for(
-            "sendPhoto", lambda c: c.ok and c.params.get("chat_id") == GROUP, 15, start=begin
+            "sendPhoto",
+            lambda c: (
+                c.ok and c.params.get("chat_id") == GROUP and c.params.get("photo") == "receipt-photo-1"
+            ),
+            15,
+            start=begin,
         )
         assert photo.params.get("photo") == "receipt-photo-1"
         buttons = [b for row in card.params["reply_markup"]["inline_keyboard"] for b in row]
@@ -359,7 +373,7 @@ async def test_manual_transfer_receipt_card_rights_and_confirmation(
         denied = await shop.tg.wait_for(
             "answerCallbackQuery", lambda c: c.params.get("callback_query_id") == cq, 15, start=begin
         )
-        assert denied.params.get("text") == "Нет прав" and denied.params.get("show_alert") is True
+        assert denied.text == "Нет прав" and denied.params.get("show_alert") is True
         assert await shop.balance(5_009) == 0
         # a non-staff press writes nothing (no audit spam from forged callbacks); staff without
         # payments.confirm is audited — tests/billing/test_receipts_router.py
@@ -371,7 +385,7 @@ async def test_manual_transfer_receipt_card_rights_and_confirmation(
         ask = await shop.tg.wait_for(
             "answerCallbackQuery", lambda c: c.params.get("callback_query_id") == cq, 15, start=begin
         )
-        assert "Сверьте сумму" in str(ask.params.get("text"))
+        assert "Сверьте сумму" in ask.text
         assert await shop.balance(5_009) == 0
         await until(
             lambda: any(
@@ -388,16 +402,16 @@ async def test_manual_transfer_receipt_card_rights_and_confirmation(
         ok = await shop.tg.wait_for(
             "answerCallbackQuery", lambda c: c.params.get("callback_query_id") == cq, 15, start=begin
         )
-        assert "зачислены" in str(ok.params.get("text"))
+        assert "зачислены" in ok.text
         await ilya.wait_text("Зачислено 179 ₽", timeout=20)
         assert await shop.balance(5_009) == 17_900
         cq = shop.tg.push_callback(OWNER_ID, sure, card_id, chat_id=GROUP)["callback_query"]["id"]
         again = await shop.tg.wait_for(
             "answerCallbackQuery", lambda c: c.params.get("callback_query_id") == cq, 15, start=begin
         )
-        assert "Уже решено" in str(again.params.get("text"))
+        assert "Уже решено" in again.text
         await until(
-            lambda: "Подтверждено" in str((shop.tg.message(GROUP, card_id) or {}).get("text")),
+            lambda: "Подтверждено" in _shown(shop.tg.message(GROUP, card_id)),
             what="the card shows the decision",
         )
         assert _card_buttons(shop.tg.message(GROUP, card_id)) == []  # no buttons left on a decided card
@@ -418,6 +432,7 @@ async def _bought(shop: Shop, telegram_id: int) -> dict[str, Any]:
     person = shop.person(telegram_id)
     await person.start()
     await shop.fund(telegram_id, 20_000)
+    await person.press("Подписка", expect="📱 Подписка")
     await person.press("Купить подписку", expect="Выберите срок")
     await person.press("1 мес.", expect="Спишем с баланса")
     await person.press("Оплатить 179")
@@ -434,6 +449,7 @@ async def test_devices_list_and_delete_through_the_writer(start_app: StartApp, a
         shop.panel.add_device(panel_id, "hw-win", platform="Windows")
         kira = shop.person(5_010)
         await kira.start()
+        await kira.press("Подписка", expect="Статус: 🟢 активна")
         await kira.press("Устройства")
         await kira.wait_text("Устройства: 2 из 5", timeout=20)
         await kira.press("🗑 1", expect="Устройства: 1 из 5")

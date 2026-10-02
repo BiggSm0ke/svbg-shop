@@ -42,6 +42,7 @@ import asyncpg
 from svbg.core.clock import now
 from svbg.remnawave.contributors import Substitution, forward, same_squads
 from svbg.remnawave.errors import ErrorKind, RemnawaveError
+from svbg.tg.report import Report
 
 if TYPE_CHECKING:
     from svbg.remnawave.api import RemnawaveApi
@@ -360,6 +361,36 @@ class ShadowReport:
                 lines.extend(f"   · {p}"[:200] for p in c.problems[:3])
         lines.append(f"Writer: {self.ops_total} операций (цель — 0); в панель ничего не записано")
         return "\n".join(lines)[:4000]
+
+    def summary_report(self, tz: tzinfo | None = None) -> Report:
+        """The same summary as a card: one row per check, the problems of red ones as a list."""
+        at = self.as_of.astimezone(tz or UTC).strftime("%d.%m %H:%M")
+        rep = Report("🌓", "Shadow-сверка Bedolaga").footer(f"на {at}")
+        if self.blocked:
+            return rep.line("Не выполнена", self.blocked)
+        if self.green:
+            rep.line("Итог", f"все проверки зелёные, дней подряд: {self.streak} из {STREAK_DAYS}")
+        else:
+            rep.line("Красные", ", ".join(c.replace("C", "С") for c in self.red_codes))
+        mark = {"ok": "✅", "fail": "❌", "error": "⚠️"}
+        rep.table(
+            ["Проверка", "Результат"],
+            [
+                [f"{c.code.replace('C', 'С')} {mark[c.status]} {c.title}", (c.error or c.summary)[:200]]
+                for c in self.checks
+            ],
+            "ll",
+            max_rows=20,
+        )
+        problems = [
+            f"{c.code.replace('C', 'С')}: {p}"[:200]
+            for c in self.checks
+            if c.status != "ok"
+            for p in c.problems[:3]
+        ]
+        if problems:
+            rep.section("Расхождения").bullets(problems[:15])
+        return rep.line("Writer", f"{self.ops_total} операций (цель 0), в панель ничего не записано")
 
 
 def _jsonable(value: Any) -> Any:
@@ -1716,7 +1747,7 @@ class _Attention(Protocol):
 
 #: ``await importer(mode="shadow", source_dsn=dsn)`` → the importer's report (``import_runs.report``).
 ImporterPort = Callable[..., Awaitable[Mapping[str, Any] | None]]
-PostFn = Callable[[str, str], Awaitable[Any]]
+PostFn = Callable[[str, Report], Awaitable[Any]]
 
 ATTN_TOKEN: Final = "shadow:token_writable"  # noqa: S105 - attention dedup key, not a secret
 ATTN_RED: Final = "shadow:red"
@@ -1844,7 +1875,7 @@ class ShadowService:
     async def _announce(self, report: ShadowReport, zone: tzinfo) -> None:
         if self._post is not None:
             try:
-                await self._post("system", report.summary_text(zone))
+                await self._post("system", report.summary_report(zone))
             except Exception:
                 log.exception("shadow: summary not posted")
         if self._attention is None or report.blocked:

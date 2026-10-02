@@ -270,6 +270,16 @@ REQUESTED: dict[str, tuple[str, Any, str, Apply, float | None, float | None, set
     "REISSUE_COOLDOWN_MINUTES": ("int", 10, "sales", Apply.HOT, 0, 1440, set()),
     "DEVICES_RESET_COOLDOWN_MINUTES": ("int", 5, "sales", Apply.HOT, 0, 1440, set()),
     "PAY_CLOCK_SKEW_ALERT_COUNT": ("int", 5, "payments", Apply.HOT, 1, 100, {"owner_only"}),
+    "CAPTCHA_ENABLED": ("bool", True, "sales", Apply.HOT, None, None, set()),
+    "CAPTCHA_EMOJIS": (
+        "list[str]",
+        ["🍎", "🥝", "🍓", "🍌", "🍑", "🌶️"],
+        "sales",
+        Apply.HOT,
+        None,
+        None,
+        {"advanced"},
+    ),
 }
 
 
@@ -316,6 +326,11 @@ def test_no_site_payment_section(reg: Registry) -> None:
         ("I18N_AVAILABLE", "ru, en", "ru, de"),
         ("IMPORT_SOURCE_DSN", "postgresql://ro:p@old:5432/bedolaga", "mysql://x"),
         ("ONBOARDING_RULES", "on", "maybe"),
+        ("CAPTCHA_EMOJIS", "🍎, 🍌", "🍎"),
+        ("CAPTCHA_EMOJIS", "🍎,🍌,🍓", "🍎, 🍌, 🍎"),
+        ("CAPTCHA_EMOJIS", "🇷🇺, 1️⃣, ★", "🍎, a"),
+        ("CAPTCHA_EMOJIS", "🍎, 🍌", "🍎, 12"),
+        ("CAPTCHA_EMOJIS", "🍎, 🍌", ", ".join("🍎🍌🍓🥝🍑🍒🍇🍉🍋🍊🍐🍏🥥")),
     ],
 )
 def test_validators(reg: Registry, key: str, good: str, bad: str) -> None:

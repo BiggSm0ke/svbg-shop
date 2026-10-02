@@ -155,7 +155,7 @@ async def test_every_module_registers_with_fakes(start_app: StartApp, module_env
         async with ClientSession() as session, session.get(f"{app.web.url}/m/{'x' * 24}") as resp:
             assert resp.status == 404
 
-        # the home screen: module buttons for the user, «🛠 Админка» for the owner → the admin hub
+        # the home screen: module buttons for the user, «🛠 Админка» for the owner → the admin sections
         user = shop.person(5005)
         await user.start()
         labels = [str(b.get("text")) for b in user.buttons()]
@@ -164,14 +164,15 @@ async def test_every_module_registers_with_fakes(start_app: StartApp, module_env
         assert not any("Админка" in x for x in labels)
         owner = shop.person(OWNER_ID)
         await owner.start()
-        await owner.press("Админка", expect="Выберите раздел")
+        await owner.press("Админка", expect="Чтобы найти человека")
         hub_labels = [str(b.get("text")) for b in owner.buttons()]
-        for label in ("Сводка", "Пользователи", "Промокоды", "Рассылки", "Конструктор", "Бэкапы"):
+        for label in ("Пользователи", "Тарифы", "Оплата", "Маркетинг", "Связь", "Оформление", "Система"):
             assert any(label in x for x in hub_labels), (label, hub_labels)
+        await owner.press("Маркетинг", expect="Реклама считает")
         await owner.press("Промокоды")
         await owner.start()
-        await owner.press("Админка", expect="Выберите раздел")
-        await owner.press("Сводка")
+        await owner.press("Админка", expect="Чтобы найти человека")
+        await owner.press("Статистика", expect="Выручка")
 
         # promo by the user's button: the code form opens
         await user.start()

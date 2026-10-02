@@ -1,16 +1,14 @@
-"""«🛠 Админка» — the admin home with the dashboard (04 §9, 01 §1.6 «Статистика»).
+"""The dashboard numbers (04 §9, 01 §1.6 «Статистика») and the screen «📊 Статистика» (``adm.s``).
 
-One screen ``adm`` for all staff:
-
-* Support sees the entry points (search);
-* owners and admins with ``stats`` also see the numbers for **today / 7 days / 30 days** in the owner's time
-  zone (``TIMEZONE``): revenue per payment instance (only real paid payments — admin credits, test and
-  imported payments are not revenue), new users, trials and how many of those trials were paid for, active
-  paid and trial subscriptions, expired in the last 7 days, and «Требует внимания» (open attention items);
-* buttons to the other admin sections the viewer may open (users, roles, plans, settings, «Состояние»).
+For owners and admins with ``stats``: the numbers for **today / 7 days / 30 days** in the owner's time zone
+(``TIMEZONE``): revenue per payment instance (only real paid payments — admin credits, test and imported
+payments are not revenue), new users, trials and how many of those trials were paid for, active paid and trial
+subscriptions, expired in the last 7 days, «Требует внимания» (open attention items) and manual receipts
+waiting for a decision.
 
 The numbers are two SQL statements, cached in memory for :data:`CACHE_TTL` seconds («🔄 Обновить» re-reads):
-a click normally costs no SQL at all. ``/admin`` opens the screen in a private chat.
+a click normally costs no SQL at all. The admin root (``svbg.tg.admin.menu``) shows three lines of the same
+cached numbers (:func:`render_live`).
 """
 
 from __future__ import annotations
@@ -26,19 +24,16 @@ from typing import TYPE_CHECKING, Any, Final
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import sqlalchemy as sa
-from aiogram import Router
-from aiogram.dispatcher.event.bases import SkipHandler
-from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, Message
+from aiogram.types import InlineKeyboardButton
 
 from svbg.core.clock import now
-from svbg.core.money import format_money
+from svbg.core.money import CURRENCY_SYMBOL, exponent, format_money
 from svbg.services import roles
 from svbg.services.roles import Act, Actor
-from svbg.tg.admin.users import settings_reader
-from svbg.tg.admin.users.screens import ADMIN_HOME, SCREEN_FIND
+from svbg.tg.admin import nav
+from svbg.tg.report import num, pre_table
 from svbg.tg.ui.renderer import nav_button
-from svbg.tg.ui.view import View
+from svbg.tg.ui.view import Redirect, View
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncConnection
@@ -55,51 +50,63 @@ __all__ = [
     "DashboardScreens",
     "Stats",
     "collect",
+    "render_live",
+    "render_stats",
     "setup",
     "windows",
 ]
 
 log = logging.getLogger("svbg.tg.admin.dashboard")
 
-SCREEN: Final = ADMIN_HOME
+SCREEN: Final = nav.STATS
 ACTIONS: Final = "adma"
 CACHE_TTL: Final = 60.0
 COLLECT_TIMEOUT: Final = 10.0
 ATTENTION_TOP: Final = 3
-# Screens of other admin modules (linked only when the viewer may open them).
-ROLES_SCREEN: Final = "roles"  # svbg.tg.admin.roles.SCREEN_LIST
-PLANS_SCREEN: Final = "plans"  # svbg.tg.admin.plans.SCREEN_LIST
-SETTINGS_SCREEN: Final = "settings_root"  # svbg.content.defaults.SETTINGS_ROOT
-STATUS_SCREEN: Final = "status"  # svbg.tg.admin.status.SCREEN
-ATTENTION_SCREEN: Final = "status.att"  # svbg.tg.admin.status.SCREEN_ATTENTION
-HOME: Final = "home"
+REVENUE_ROWS: Final = 5  # kassas listed one by one on «📊 Статистика» (the rest are in the totals)
+PLAN_ROWS: Final = 5  # plans in the sales table of «📊 Статистика»
+# Screens of other admin modules (linked only when registered and allowed).
+OPS_SCREEN: Final = "ops"  # svbg.ops.module.SCREEN (its action ``ops:rep`` = «📊 Отчёт сейчас»)
+ADS_SCREEN: Final = "ads"  # svbg.ads.admin.SCREEN_LIST
+SLICE_SCREEN: Final = "set.v"  # svbg.tg.admin.slices.SCREEN
 
 _T: Final[dict[str, str]] = {
-    "title": "🛠 <b>Админка</b>",
-    "support_hint": "Найдите пользователя по ID, @username, имени, ссылке подписки, shortUuid "
-    "или номеру платежа.",
+    "title": "📊 <b>Статистика</b>",
     "updated": "<i>Данные на {at} ({tz})</i>",
     "periods": "сегодня · 7 дн. · 30 дн.",
-    "revenue": "💵 <b>Выручка</b> ({periods})",
+    "revenue": "💵 <b>Выручка, {symbol}</b>",
     "revenue_line": "{title}: {d1} · {d7} · {d30}",
     "revenue_total": "<b>Итого {cur}</b>: {d1} · {d7} · {d30}",
     "revenue_none": "Оплат за 30 дней не было.",
+    "col_desk": "Касса",
+    "col_d1": "Сегодня",
+    "col_d7": "7 дн",
+    "col_d30": "30 дн",
+    "total": "Итого",
+    "people": "👥 <b>Пользователи</b>",
+    "row_new": "Новые",
+    "row_trials": "Пробные",
+    "plans": "🛒 <b>Тарифы за 30 дней</b>",
+    "col_plan": "Тариф",
+    "col_count": "Шт",
+    "col_sum": "Сумма, {symbol}",
+    "plans_more": "и ещё тарифов: {n}",
     "new_users": "👥 Новые пользователи: {d1} · {d7} · {d30}",
     "trials": "🎁 Пробные: {d1} · {d7} · {d30}",
-    "conversion": "📈 Оплатили после пробной (из взявших за 30 дн.): {conv} из {n}{pct}",
-    "active": "📶 Активные подписки: {paid} платных, {trial} пробных",
-    "churn": "📉 Истекли за 7 дн. и не продлены: {n}",
+    "conversion": "📈 Купили после пробной: <b>{conv} из {n}</b>{pct}",
+    "active": "📶 Активные подписки: <b>{paid}</b> платных, <b>{trial}</b> пробных",
+    "churn": "📉 Истекли за 7 дн. и не продлены: <b>{n}</b>",
     "attention": "⚠️ <b>Требует внимания</b>: {n}",
     "attention_none": "✅ Всё в порядке: открытых проблем нет.",
+    "revenue_more": "и ещё касс: {n} (они вошли в итог)",
     "unavailable": "⚠️ Статистика сейчас недоступна, попробуйте обновить через минуту.",
-    "b_find": "🔍 Найти пользователя",
+    "live_revenue": "Выручка: сегодня {d1}, за 7 дней {d7}, за 30 дней {d30}",
+    "live_users": "Новых сегодня: {new}. Активных подписок: {paid}, пробных: {trial}",
+    "live_attention": "Требует внимания: {n}",
     "b_refresh": "🔄 Обновить",
-    "b_attention": "⚠️ Требует внимания",
-    "b_roles": "👥 Роли",
-    "b_plans": "📦 Тарифы",
-    "b_settings": "⚙️ Настройки",
-    "b_status": "🩺 Состояние",
-    "b_home": "🏠 Меню",
+    "b_report": "📊 Отчёт сейчас",
+    "b_daily": "📰 Ежедневный отчёт",
+    "b_ads": "📢 Воронка рекламы",
     "refreshed": "Обновлено",
 }
 _SEVERITY_ICON: Final[Mapping[str, str]] = {"error": "🔴", "warn": "🟡", "info": "🔵"}
@@ -138,6 +145,16 @@ class Revenue:
 
 
 @dataclass(frozen=True, slots=True)
+class PlanSales:
+    """Plan purchases paid in the last 30 days (from the wallet, whatever topped it up)."""
+
+    title: str
+    currency: str
+    count: int
+    amount: int
+
+
+@dataclass(frozen=True, slots=True)
 class Stats:
     at: datetime
     new_users: tuple[int, int, int]
@@ -149,6 +166,8 @@ class Stats:
     attention_count: int
     attention_top: tuple[tuple[str, str], ...]  # (severity, title)
     revenue: tuple[Revenue, ...] = field(default_factory=tuple)
+    receipts_pending: int = 0  # manual payments waiting for a decision (``manual_receipts.submitted``)
+    plans: tuple[PlanSales, ...] = field(default_factory=tuple)
 
     def totals(self) -> dict[str, tuple[int, int, int]]:
         out: dict[str, list[int]] = {}
@@ -188,6 +207,9 @@ a AS (
     SELECT count(*) AS n FROM attention_items
     WHERE resolved_at IS NULL AND (snoozed_until IS NULL OR snoozed_until <= :now)
 ),
+rc AS (
+    SELECT count(*) AS n FROM manual_receipts WHERE status = 'submitted'
+),
 top AS (
     SELECT coalesce(json_agg(json_build_array(severity, title)), '[]'::json) AS items FROM (
         SELECT severity, title FROM attention_items
@@ -197,8 +219,8 @@ top AS (
     ) x
 )
 SELECT u.n1 AS u1, u.n7 AS u7, u.n30 AS u30, t.n1 AS t1, t.n7 AS t7, t.n30 AS t30, t.conv,
-       s.paid, s.trial, s.churn, a.n AS att, top.items AS att_top
-FROM u, t, s, a, top
+       s.paid, s.trial, s.churn, a.n AS att, top.items AS att_top, rc.n AS receipts
+FROM u, t, s, a, rc, top
 """
 )
 
@@ -217,9 +239,23 @@ LIMIT 20
 """
 )
 
+_PLANS_SQL: Final = sa.text(
+    """
+SELECT coalesce(pl.name->>'ru', pl.name->>'en', pl.code, '—') AS title,
+       o.currency,
+       count(*) AS n,
+       coalesce(sum(o.total_minor), 0) AS amount
+FROM orders o LEFT JOIN plans pl ON pl.id = o.plan_id
+WHERE o.kind IN ('new', 'renew', 'change') AND o.status IN ('paid', 'fulfilled') AND o.paid_at >= :d30
+GROUP BY 1, 2
+ORDER BY amount DESC, n DESC, title
+LIMIT 20
+"""
+)
+
 
 async def collect(conn: AsyncConnection, win: Windows) -> Stats:
-    """The dashboard numbers: two statements."""
+    """The dashboard numbers: three statements."""
     params = {
         "d1": win.today,
         "d7": win.week,
@@ -230,6 +266,7 @@ async def collect(conn: AsyncConnection, win: Windows) -> Stats:
     }
     row = (await conn.execute(_COUNTS_SQL, params)).mappings().one()
     revenue = (await conn.execute(_REVENUE_SQL, params)).mappings().all()
+    plans = (await conn.execute(_PLANS_SQL, params)).mappings().all()
     top_raw = row["att_top"] if isinstance(row["att_top"], list) else []
     top = tuple((str(item[0]), str(item[1])) for item in top_raw if isinstance(item, list) and len(item) == 2)
     return Stats(
@@ -242,9 +279,13 @@ async def collect(conn: AsyncConnection, win: Windows) -> Stats:
         churn_7d=int(row["churn"]),
         attention_count=int(row["att"]),
         attention_top=top,
+        receipts_pending=int(row["receipts"]),
         revenue=tuple(
             Revenue(str(r["title"]), str(r["currency"]), int(r["r1"]), int(r["r7"]), int(r["r30"]))
             for r in revenue
+        ),
+        plans=tuple(
+            PlanSales(str(r["title"]), str(r["currency"]), int(r["n"]), int(r["amount"])) for r in plans
         ),
     )
 
@@ -313,11 +354,104 @@ def _actor(user: UserCtx) -> Actor:
     return Actor(user.user_id, user.telegram_id, user.role, user.perms)
 
 
-def render_stats(stats: Stats, tz: tzinfo) -> list[str]:
+def _sum_text(amounts: dict[str, int]) -> str:
+    return " + ".join(_money(v, cur) for cur, v in amounts.items()) if amounts else _money(0, "RUB")
+
+
+def render_live(stats: Stats, *, currency: str = "RUB") -> list[str]:
+    """The root's three lines from the cached numbers: revenue totals, new users and active subscriptions,
+    open problems (only when there are any)."""
+    totals = stats.totals() or {currency: (0, 0, 0)}
+    periods = [{cur: v[i] for cur, v in totals.items()} for i in range(3)]
+    lines = [
+        _esc(
+            _T["live_revenue"].format(
+                d1=_sum_text(periods[0]), d7=_sum_text(periods[1]), d30=_sum_text(periods[2])
+            )
+        ),
+        _T["live_users"].format(new=stats.new_users[0], paid=stats.active_paid, trial=stats.active_trial),
+    ]
+    if stats.attention_count:
+        lines.append(_T["live_attention"].format(n=stats.attention_count))
+    return lines
+
+
+def _units(amount_minor: int, currency: str) -> str:
+    """Whole units for a table cell (the currency is in the column header): ``12 346``."""
+    try:
+        exp = exponent(currency)
+    except (KeyError, ValueError):
+        exp = 2
+    return num(round(amount_minor / 10**exp))
+
+
+def _symbol(currency: str) -> str:
+    return CURRENCY_SYMBOL.get(currency.upper(), currency)
+
+
+_PERIODS: Final = ("right", "right", "right")
+
+
+def _revenue_tables(stats: Stats, max_rows: int | None) -> list[str] | None:
+    """One ``<pre>`` table per currency: cash desks × today / 7 / 30 days, with a total row; ``None`` if a
+    table does not fit a phone (the caller writes lines instead)."""
+    listed = stats.revenue if max_rows is None else stats.revenue[:max_rows]
+    totals = stats.totals()
+    head = [_T["col_desk"], _T["col_d1"], _T["col_d7"], _T["col_d30"]]
+    out: list[str] = []
+    for cur in dict.fromkeys(r.currency for r in stats.revenue):
+        rows = [
+            [r.title[:32], *(_units(v, cur) for v in (r.d1, r.d7, r.d30))]
+            for r in listed
+            if r.currency == cur
+        ]
+        many = sum(1 for r in stats.revenue if r.currency == cur) > 1
+        if many:
+            rows.append([_T["total"], *(_units(v, cur) for v in totals[cur])])
+        pre = pre_table([head, *rows], ("left", *_PERIODS), rule_before=len(rows) if many else None)
+        if pre is None:
+            return None
+        out += [_T["revenue"].format(symbol=_esc(_symbol(cur))), pre]
+    hidden = len(stats.revenue) - len(listed)
+    if hidden > 0:
+        out.append(_T["revenue_more"].format(n=hidden))
+    return out
+
+
+def _plans_table(stats: Stats) -> list[str]:
+    if not stats.plans:
+        return []
+    shown = stats.plans[:PLAN_ROWS]
+    one = len({p.currency for p in stats.plans}) == 1
+    symbol = _symbol(stats.plans[0].currency) if one else ""
+    rows = [
+        [
+            p.title[:40],
+            num(p.count),
+            _units(p.amount, p.currency) + ("" if one else f" {_symbol(p.currency)}"),
+        ]
+        for p in shown
+    ]
+    head = [_T["col_plan"], _T["col_count"], _T["col_sum"].format(symbol=symbol) if one else "Сумма"]
+    pre = pre_table([head, *rows], ("left", "right", "right"))
+    if pre is None:
+        return []
+    out = ["", _T["plans"], pre]
+    if len(stats.plans) > len(shown):
+        out.append(_T["plans_more"].format(n=len(stats.plans) - len(shown)))
+    return out
+
+
+def render_stats(stats: Stats, tz: tzinfo, *, max_rows: int | None = None) -> list[str]:
+    """«📊 Статистика»: money and people as small monospace tables (today / 7 / 30 days), then lines."""
     lines = [_T["updated"].format(at=stats.at.astimezone(tz).strftime("%d.%m %H:%M"), tz=_esc(str(tz))), ""]
-    lines.append(_T["revenue"].format(periods=_T["periods"]))
-    if stats.revenue:
-        for r in stats.revenue:
+    tables = _revenue_tables(stats, max_rows) if stats.revenue else None
+    if tables is not None:
+        lines += tables
+    elif stats.revenue:
+        lines.append(_T["revenue"].format(symbol=_esc(_T["periods"])))
+        listed = stats.revenue if max_rows is None else stats.revenue[:max_rows]
+        for r in listed:
             lines.append(
                 _T["revenue_line"].format(
                     title=_esc(r.title[:32]),
@@ -326,6 +460,8 @@ def render_stats(stats: Stats, tz: tzinfo) -> list[str]:
                     d30=_esc(_money(r.d30, r.currency)),
                 )
             )
+        if len(listed) < len(stats.revenue):
+            lines.append(_T["revenue_more"].format(n=len(stats.revenue) - len(listed)))
         totals = stats.totals()
         if len(stats.revenue) > 1:
             for cur, (d1, d7, d30) in totals.items():
@@ -338,10 +474,24 @@ def render_stats(stats: Stats, tz: tzinfo) -> list[str]:
                     )
                 )
     else:
-        lines.append(_T["revenue_none"])
+        lines += [_T["revenue"].format(symbol=_esc(_symbol("RUB"))), _T["revenue_none"]]
+    lines += _plans_table(stats)
     lines.append("")
-    lines.append(_T["new_users"].format(d1=stats.new_users[0], d7=stats.new_users[1], d30=stats.new_users[2]))
-    lines.append(_T["trials"].format(d1=stats.trials[0], d7=stats.trials[1], d30=stats.trials[2]))
+    people = pre_table(
+        [
+            ["", _T["col_d1"], _T["col_d7"], _T["col_d30"]],
+            [_T["row_new"], *(num(v) for v in stats.new_users)],
+            [_T["row_trials"], *(num(v) for v in stats.trials)],
+        ],
+        ("left", *_PERIODS),
+    )
+    if people is not None:
+        lines += [_T["people"], people]
+    else:
+        lines.append(
+            _T["new_users"].format(d1=stats.new_users[0], d7=stats.new_users[1], d30=stats.new_users[2])
+        )
+        lines.append(_T["trials"].format(d1=stats.trials[0], d7=stats.trials[1], d30=stats.trials[2]))
     n = stats.trials[2]
     if n:
         pct = f" ({round(100 * stats.trials_converted / n)}%)"
@@ -360,7 +510,8 @@ def render_stats(stats: Stats, tz: tzinfo) -> list[str]:
 
 
 class DashboardScreens:
-    """Registers ``adm`` (+ «🔄 Обновить») and ``/admin``."""
+    """Registers «📊 Статистика» (``adm.s``) and «🔄 Обновить» (``adma:rf``; arg ``s`` — back to the stats,
+    none — the admin root, as in the old messages of the former dashboard home)."""
 
     def __init__(self, router: ScreenRouter, dashboard: Dashboard) -> None:
         self.router = router
@@ -371,89 +522,43 @@ class DashboardScreens:
         if self._installed:
             return
         self._installed = True
-        self.router.screen(SCREEN, required_role="support")(self._screen)
+        self.router.screen(SCREEN, required_role="admin", perm="stats")(self._screen)
         self.router.action(ACTIONS, "rf", required_role="admin", perm="stats")(self._refresh)
 
     async def _screen(self, ctx: ScreenCtx, _arg: Any) -> View:
         return await self.view(ctx.user)
 
-    async def _refresh(self, ctx: ScreenCtx, _arg: Any) -> View:
-        view = await self.view(ctx.user, refresh=True)
-        view.toast = _T["refreshed"]
-        return view
+    async def _refresh(self, ctx: ScreenCtx, arg: Any) -> Redirect:
+        await self.dashboard.get(refresh=True)
+        return Redirect(SCREEN if arg == "s" else nav.ROOT, toast=_T["refreshed"])
 
     async def view(self, user: UserCtx, *, refresh: bool = False) -> View:
-        actor = _actor(user)
-        lines = [_T["title"], ""]
-        stats_allowed = roles.authorize(actor, Act.STATS)
-        if stats_allowed:
-            stats = await self.dashboard.get(refresh=refresh)
-            lines.extend(
-                render_stats(stats, self.dashboard.tz()) if stats is not None else [_T["unavailable"]]
-            )
+        stats = await self.dashboard.get(refresh=refresh)
+        lines = [_T["title"], _esc(nav.breadcrumb(SCREEN)), ""]
+        if stats is None:
+            lines.append(_T["unavailable"])
         else:
-            lines.append(_T["support_hint"])
-        return View(
-            text="\n".join(lines), parse_mode="HTML", keyboard=self._keyboard(user, actor, stats_allowed)
-        )
+            lines.extend(render_stats(stats, self.dashboard.tz(), max_rows=REVENUE_ROWS))
+        return View(text="\n".join(lines), parse_mode="HTML", keyboard=self._keyboard(user))
 
-    @staticmethod
-    def _keyboard(user: UserCtx, actor: Actor, stats_allowed: bool) -> list[list[InlineKeyboardButton]]:
-        rows: list[list[InlineKeyboardButton]] = [[nav_button(_T["b_find"], SCREEN_FIND)]]
-        if stats_allowed:
-            row = [nav_button(_T["b_refresh"], ACTIONS, "rf")]
-            if roles.authorize(actor, Act.SYSTEM_VIEW):
-                row.append(nav_button(_T["b_attention"], ATTENTION_SCREEN))
-            rows.append(row)
-        sections: list[InlineKeyboardButton] = []
-        if roles.authorize(actor, Act.ROLES_MANAGE):
-            sections.append(nav_button(_T["b_roles"], ROLES_SCREEN))
-        if actor.has_perm("plans"):
-            sections.append(nav_button(_T["b_plans"], PLANS_SCREEN))
-        if actor.has_perm("settings.business"):
-            sections.append(nav_button(_T["b_settings"], SETTINGS_SCREEN))
-        if roles.authorize(actor, Act.SYSTEM_VIEW):
-            sections.append(nav_button(_T["b_status"], STATUS_SCREEN))
-        rows.extend(sections[i : i + 2] for i in range(0, len(sections), 2))
-        rows.append([nav_button(_T["b_home"], HOME)])
+    def _keyboard(self, user: UserCtx) -> list[list[InlineKeyboardButton]]:
+        actor = _actor(user)
+        rows: list[list[InlineKeyboardButton]] = []
+        top = [nav_button(_T["b_refresh"], ACTIONS, "rf", "s")]
+        if nav.has_screen(self.router, OPS_SCREEN) and roles.authorize(actor, Act.STATS):
+            top.append(nav_button(_T["b_report"], OPS_SCREEN, "rep"))
+        rows.append(top)
+        if nav.has_screen(self.router, SLICE_SCREEN) and user.has_perm("settings.business"):
+            rows.append([nav_button(_T["b_daily"], SLICE_SCREEN, arg="st.report")])
+        if nav.has_screen(self.router, ADS_SCREEN) and user.has_perm("promo"):
+            rows.append([nav_button(_T["b_ads"], ADS_SCREEN)])
+        rows.append(nav.back_row(SCREEN))
         return rows
 
-    def aiogram_router(self, name: str = "svbg-admin-dashboard") -> Router:
-        """``/admin`` in a private chat (any staff role)."""
-        router = Router(name=name)
 
-        async def on_admin(message: Message) -> None:
-            if not await self.handle_command(message):
-                raise SkipHandler
+def setup(router: Any, deps: Any) -> Any:
+    """Kept for configurations that still list this module: the admin home and its sections now come from
+    :mod:`svbg.tg.admin.menu` (which also registers «📊 Статистика»)."""
+    from svbg.tg.admin import menu
 
-        router.message.register(on_admin, Command("admin"))
-        return router
-
-    async def handle_command(self, message: Message) -> bool:
-        if message.from_user is None or message.chat.type != "private":
-            return False
-        try:
-            user = await self.router.user_loader(message.from_user)
-        except Exception:
-            log.exception("user loader failed for /admin")
-            return False
-        if user is None or not user.at_least("support"):
-            return False
-        await self.router.show(user, message.chat.id, SCREEN, new=True)
-        return True
-
-
-def setup(router: Any, deps: Any) -> Router:
-    """Module entry point for ``svbg.app`` (``setup(router, deps)``)."""
-    read = settings_reader(getattr(deps, "settings", None))
-
-    def timezone() -> str:
-        try:
-            value = read()["TIMEZONE"]
-        except KeyError:
-            return "Europe/Moscow"
-        return str(value or "Europe/Moscow")
-
-    screens = DashboardScreens(router, Dashboard(deps.db, timezone=timezone))
-    screens.install()
-    return screens.aiogram_router()
+    return menu.setup(router, deps)

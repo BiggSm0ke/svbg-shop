@@ -25,6 +25,7 @@ from svbg.core.money import CURRENCY_EXPONENT
 from svbg.core.settings import values
 
 __all__ = [
+    "CAPTCHA_EMOJIS_DEFAULT",
     "EXTENSION_MODULES",
     "MODULES_SECTION",
     "PAYMENTS_SECTION",
@@ -86,6 +87,10 @@ class SettingDef:
     in_file: bool = True  # mirrored to .env
     tags: tuple[str, ...] = ()  # search synonyms
     hint: str | None = None  # example / where to get it
+    # For the bot's screens (``svbg.core.settings.labels`` has them for the bundled keys;
+    # .env keeps raw values):
+    choice_labels: Mapping[str, str] | None = None  # enum value → owner-facing label
+    presets: tuple[Any, ...] | None = None  # ready values shown as buttons on the card
 
     @cached_property
     def kind(self) -> str:
@@ -404,6 +409,14 @@ def _check_webhook_mode(cfg: Mapping[str, Any], changed: frozenset[str]) -> Mapp
     return {}
 
 
+def _check_sub_button_days(cfg: Mapping[str, Any], changed: frozenset[str]) -> Mapping[str, str]:
+    blue, red = cfg.get("SUB_BUTTON_BLUE_DAYS"), cfg.get("SUB_BUTTON_RED_DAYS")
+    if isinstance(blue, int) and isinstance(red, int) and red >= blue:
+        keys = changed & {"SUB_BUTTON_BLUE_DAYS", "SUB_BUTTON_RED_DAYS"} or {"SUB_BUTTON_RED_DAYS"}
+        return dict.fromkeys(keys, f"красный порог ({red} дн.) должен быть меньше синего ({blue} дн.)")
+    return {}
+
+
 def _positive_ints(value: Any) -> None:
     for item in value or []:
         if isinstance(item, bool) or not isinstance(item, int) or item <= 0:
@@ -438,6 +451,29 @@ def _languages(value: Any) -> None:
     for item in value or []:
         if str(item) not in LANGUAGES:
             raise ValueError(f"неизвестный язык {item}; доступны: {', '.join(LANGUAGES)}")
+
+
+#: The entry captcha's emojis (``svbg.tg.user.captcha``): one of them is the answer, all are the buttons.
+CAPTCHA_EMOJIS_DEFAULT: Final = ("🍎", "🥝", "🍓", "🍌", "🍑", "🌶️")
+CAPTCHA_EMOJIS_MAX: Final = 12
+_EMOJI_MAX_CHARS: Final = 16  # a flag or a family emoji is several code points
+
+
+def _captcha_emojis(value: Any) -> None:
+    items = [str(item) for item in value or []]
+    if len(items) < 2:
+        raise ValueError("нужно хотя бы 2 значка через запятую, например 🍎, 🍌, 🍓")
+    if len(items) > CAPTCHA_EMOJIS_MAX:
+        raise ValueError(f"не больше {CAPTCHA_EMOJIS_MAX} значков")
+    if len(set(items)) != len(items):
+        raise ValueError("значки не должны повторяться")
+    for item in items:
+        if (
+            len(item) > _EMOJI_MAX_CHARS
+            or any(ch.isalpha() or ch.isspace() for ch in item)
+            or not any(ord(ch) >= 0x2000 for ch in item)
+        ):
+            raise ValueError(f"«{item}» не похоже на эмодзи")
 
 
 def _check_languages(cfg: Mapping[str, Any], changed: frozenset[str]) -> Mapping[str, str]:
@@ -1009,6 +1045,34 @@ def core_registry() -> Registry:
     )
     add(
         SettingDef(
+            "SUB_BUTTON_BLUE_DAYS",
+            int,
+            10,
+            "sales",
+            "Кнопка подписки синеет за N дней до конца",
+            "Кнопка «📱 Подписка» в меню показывает, сколько осталось. Пока дней больше этого числа, она "
+            "зелёная, меньше — синяя. У пробного периода кнопка всегда красная.",
+            min=1,
+            max=365,
+            tags=("подписка", "кнопка", "цвет", "меню"),
+        )
+    )
+    add(
+        SettingDef(
+            "SUB_BUTTON_RED_DAYS",
+            int,
+            3,
+            "sales",
+            "Кнопка подписки краснеет за N дней до конца",
+            "Когда до конца оплаченной подписки остаётся меньше этого числа дней, кнопка «📱 Подписка» "
+            "становится красной. Должно быть меньше, чем у синего цвета.",
+            min=1,
+            max=365,
+            tags=("подписка", "кнопка", "цвет", "меню"),
+        )
+    )
+    add(
+        SettingDef(
             "REQUIRED_CHANNEL_ID",
             int,
             None,
@@ -1057,6 +1121,33 @@ def core_registry() -> Registry:
             "отключить и платные подписки. Боту нужны права администратора канала.",
             choices=("off", "trial", "all"),
             tags=("канал", "отписка", "channel"),
+        )
+    )
+    add(
+        SettingDef(
+            "CAPTCHA_ENABLED",
+            bool,
+            True,
+            "sales",
+            "Капча при входе",
+            "Новый пользователь после /start нажимает на нужный значок среди нескольких, и только потом "
+            "попадает в меню. Кто прошёл капчу один раз, больше её не видит. Сотрудники не видят никогда.",
+            tags=("капча", "captcha", "боты", "защита"),
+        )
+    )
+    add(
+        SettingDef(
+            "CAPTCHA_EMOJIS",
+            "list[str]",
+            list(CAPTCHA_EMOJIS_DEFAULT),
+            "sales",
+            "Значки капчи",
+            "Из них капча выбирает, на какой нажать, и показывает все кнопками в случайном порядке. "
+            f"Через запятую, от 2 до {CAPTCHA_EMOJIS_MAX} разных.",
+            validator=_captcha_emojis,
+            advanced=True,
+            tags=("капча", "captcha", "эмодзи"),
+            hint=", ".join(CAPTCHA_EMOJIS_DEFAULT),
         )
     )
     add(
@@ -1572,6 +1663,7 @@ def core_registry() -> Registry:
     _add_payment_instances(reg)
     reg.add_check(_check_webhook_mode)
     reg.add_check(_check_languages)
+    reg.add_check(_check_sub_button_days)
     return reg
 
 

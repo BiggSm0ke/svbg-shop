@@ -129,7 +129,13 @@ def shared(user_id: int, chat_id: int = GROUP, request_id: int = REQUEST_ID) -> 
 async def test_owner_connects_by_picking_a_group(s: Setup) -> None:
     screen = await open_screen(s)
     assert "Сейчас уведомления приходят вам в личку" in screen.params["text"]
-    assert [t for t, _ in buttons(screen)] == ["👥 Выбрать группу", "🔢 Ввести ID", "⬅️ Назад"]
+    assert [t for t, _ in buttons(screen)] == [
+        "👥 Выбрать группу",
+        "🔢 Ввести ID",
+        "✅ Сообщать, когда нода панели падает",
+        "⬅️ Связь",
+        "🛠 Админка",
+    ]
 
     assert await press(s, "👥 Выбрать группу") is None
     keyboard = sends(s.env, OWNER)[-1].params["reply_markup"]

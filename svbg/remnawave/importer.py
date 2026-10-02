@@ -2,7 +2,8 @@
 
 * streams ``users/stream`` pages (size 500) — memory is bounded by one page, never by the panel size;
 * panel users with ``telegramId`` get a bot user (found or created by ``telegram_id``) and a linked
-  subscription; several panel accounts of one Telegram user become several subscriptions (02 §6.7);
+  subscription; several panel accounts of one Telegram user become several subscriptions (02 §6.7); a user
+  created here already uses the VPN and does not get the entry captcha (``captcha_passed_at``);
 * panel users without ``telegramId`` become **unclaimed** subscriptions (``user_id IS NULL``; claiming is
   stage 2);
 * subscriptions are linked by panel ``id`` and keep ``shortUuid``/``username`` as they are; the panel's values
@@ -223,7 +224,7 @@ class PanelImporter:
                 created = (
                     await conn.execute(
                         pg_insert(users)
-                        .values([{"telegram_id": t} for t in tg])
+                        .values([{"telegram_id": t, "captcha_passed_at": sa.func.now()} for t in tg])
                         .on_conflict_do_nothing(index_elements=[users.c.telegram_id])
                         .returning(users.c.id)
                     )

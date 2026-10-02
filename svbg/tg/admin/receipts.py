@@ -50,6 +50,7 @@ from svbg.core.tables import admin_audit, users
 from svbg.payments.core import PERM_CONFIRM, CheckoutError, PermissionDeniedError
 from svbg.services.roles import STAFF_ROLES, Actor, load_actor
 from svbg.tg.notifier import TRANSPORT_ERRORS, NotifierError, Priority
+from svbg.tg.report import Report, code, from_html
 
 if TYPE_CHECKING:
     from svbg.db.engine import Database
@@ -63,6 +64,7 @@ __all__ = [
     "AdminReceiptCards",
     "Press",
     "ReceiptActions",
+    "receipt_report",
     "receipts_router",
 ]
 
@@ -82,17 +84,19 @@ REJECT_REASONS: Final[Mapping[str, str]] = {
 }
 
 TEXTS: Final[Mapping[str, str]] = {
-    "card": (
-        "🧾 <b>Чек ручной оплаты</b>\n"
-        "👤 {who}\n"
-        "Счёт: <b>{amount}</b>\n"
-        "Платёж: <code>{pid}</code>{comment}\n\n"
-        "Проверьте поступление. Если сумма по чеку другая — ответьте на это сообщение суммой из чека."
-    ),
-    "comment": "\nКомментарий: {text}",
-    "confirmed": "\n\n✅ <b>Подтверждено</b> ({by}), сумма по чеку: {amount}",
-    "mismatch": "\n\n⚠️ <b>Сумма не совпала</b> ({by}): по чеку {amount} — не зачислено, решите вручную",
-    "rejected": "\n\n❌ <b>Отклонено</b> ({by}): {reason}",
+    "card": "Чек ручной оплаты",
+    "k_who": "Клиент",
+    "k_amount": "Счёт",
+    "k_payment": "Платёж",
+    "k_comment": "Комментарий",
+    "check": "Проверьте поступление. Если сумма по чеку другая, ответьте на это сообщение суммой из чека.",
+    "confirmed": "✅ Подтверждено",
+    "mismatch": "⚠️ Сумма не совпала",
+    "mismatch_note": "Не зачислено, решите вручную.",
+    "rejected": "❌ Отклонено",
+    "k_by": "Кто решил",
+    "k_paid": "Сумма по чеку",
+    "k_reason": "Причина",
     "btn_confirm": "✅ Пришло {amount}",
     "btn_sure": "✅ Да, по чеку ровно {amount}",
     "btn_back": "↩️ Назад",
@@ -149,6 +153,32 @@ def _sure_keyboard(receipt: ReceiptView) -> list[list[InlineKeyboardButton]]:
     ]
 
 
+def receipt_report(
+    receipt: ReceiptView,
+    who: str,
+    *,
+    outcome: str | None = None,
+    by: str = "—",
+    value: str = "—",
+) -> Report:
+    """The card of a receipt. ``who``: Telegram HTML of the payer; ``outcome`` (``confirmed`` / ``mismatch``
+    / ``rejected``) adds the decision: ``by`` whom, ``value`` = the amount by the receipt or the reason."""
+    rep = Report("🧾", TEXTS["card"])
+    rep.line(TEXTS["k_who"], from_html(who))
+    rep.line(TEXTS["k_amount"], format_money(receipt.amount_minor, receipt.currency, nbsp=True))
+    rep.line(TEXTS["k_payment"], code(receipt.payment_id))
+    if receipt.comment:
+        rep.line(TEXTS["k_comment"], [receipt.comment[:500]])  # a list: the user's words are not bold
+    if outcome is None:
+        return rep.note(TEXTS["check"])
+    rep.section(TEXTS[outcome] if outcome in ("confirmed", "mismatch", "rejected") else outcome)
+    rep.line(TEXTS["k_by"], by)
+    if outcome == "rejected":
+        return rep.line(TEXTS["k_reason"], value)
+    rep.line(TEXTS["k_paid"], value)
+    return rep.note(TEXTS["mismatch_note"]) if outcome == "mismatch" else rep
+
+
 class AdminReceiptCards:
     """:class:`~svbg.billing.receipts.ReceiptCards` over the admin chat (see module docstring)."""
 
@@ -172,20 +202,10 @@ class AdminReceiptCards:
         handle = f"@{escape(row.username[:64])}, " if row.username else ""
         return f"{name} ({handle}id <code>{row.telegram_id}</code>)"
 
-    async def _text(self, receipt: ReceiptView) -> str:
-        comment = TEXTS["comment"].format(text=escape(receipt.comment[:500])) if receipt.comment else ""
-        return TEXTS["card"].format(
-            who=await self._who(receipt.user_id),
-            amount=escape(format_money(receipt.amount_minor, receipt.currency)),
-            pid=escape(receipt.payment_id),
-            comment=comment,
-        )
-
     async def post(self, receipt: ReceiptView) -> Mapping[str, Any] | None:
-        result = await self._chat.post(
+        result = await self._chat.post_report(
             K_PAYMENTS,
-            await self._text(receipt),
-            html=True,
+            receipt_report(receipt, await self._who(receipt.user_id)),
             buttons=_keyboard(receipt),
             card_ref=f"receipt:{receipt.id}",
             priority=Priority.HIGH,
@@ -239,21 +259,20 @@ class AdminReceiptCards:
             ).first()
         by = "—"
         if row is not None and (row.username or row.first_name):
-            by = escape(f"@{row.username}" if row.username else str(row.first_name))[:64]
+            by = (f"@{row.username}" if row.username else str(row.first_name))[:64]
         amount_minor = row.decided_amount_minor if row is not None else None
-        amount = (
-            escape(format_money(int(amount_minor), receipt.currency)) if amount_minor is not None else "—"
-        )
+        amount = "—"
+        if amount_minor is not None:
+            amount = format_money(int(amount_minor), receipt.currency, nbsp=True)
         if decision.outcome == "rejected":
-            tail = TEXTS["rejected"].format(by=by, reason=escape((row.decision_reason if row else "") or "—"))
+            outcome, value = "rejected", (row.decision_reason if row else "") or "—"
         elif decision.payment_outcome == "mismatch":
-            tail = TEXTS["mismatch"].format(by=by, amount=amount)
+            outcome, value = "mismatch", amount
         else:
-            tail = TEXTS["confirmed"].format(by=by, amount=amount)
-        await self._chat.post(
+            outcome, value = "confirmed", amount
+        await self._chat.post_report(  # no buttons: the decided card loses its keyboard
             K_PAYMENTS,
-            await self._text(receipt) + tail,
-            html=True,
+            receipt_report(receipt, await self._who(receipt.user_id), outcome=outcome, by=by, value=value),
             card_ref=f"receipt:{receipt.id}",
             priority=Priority.HIGH,
         )

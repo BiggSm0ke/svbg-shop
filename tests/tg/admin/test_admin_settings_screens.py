@@ -13,7 +13,6 @@ from svbg.tg.admin.settings import (
     form_name,
     is_business,
 )
-from svbg.tg.ui.codec import decode
 from svbg.tg.ui.context import UserCtx
 from tests.tg.admin.settings_harness import (
     ADMIN,
@@ -73,7 +72,7 @@ async def test_owner_root_lists_sections_with_component_status(senv: SEnv) -> No
     await add_staff(senv)
     senv.component("remnawave").health_report = HealthReport.down("401")
     await senv.click(OWNER, ROOT)
-    assert "Настройки" in senv.text
+    assert "Все настройки" in senv.text
     assert senv.last().parse_mode == "HTML"
     labels = senv.labels()
     assert any("Запуск" in label for label in labels)
@@ -135,7 +134,7 @@ async def test_section_lists_keys_with_values_and_hides_advanced(senv: SEnv) -> 
     assert not any("Вид файла .env" in label for label in labels)  # ENV_LAYOUT is advanced
     await senv.press(OWNER, "Расширенные")
     labels = senv.labels()
-    assert any("Вид файла .env: full" in label for label in labels)
+    assert any("Вид файла .env: Все ключи" in label for label in labels)  # the label, not «full»
     assert any("Скрыть расширенные" in label for label in labels)
     await senv.press(OWNER, "Скрыть расширенные")
     assert not any("Вид файла .env" in label for label in senv.labels())
@@ -152,17 +151,19 @@ async def test_section_pagination(make_senv: EnvFactory) -> None:
     env = await make_senv(screens_kw={"page_size": 2})
     await add_staff(env)
     await env.click(OWNER, f"v1:{SCREEN_SECTION}:o:sales")
-    assert "1/3" in env.labels()  # stage 2: six everyday keys of «Продажи и триал»
+    # nine everyday keys of «Продажи и триал» (stage 2, the entry captcha, the «Подписка» button colours)
+    assert "1/5" in env.labels()
     first = [label for label in env.labels() if ":" in label]
     await env.press(OWNER, "▶️")
-    assert "2/3" in env.labels()
+    assert "2/5" in env.labels()
     second = [label for label in env.labels() if ":" in label]
     assert first != second
-    await env.press(OWNER, "▶️")
-    assert "3/3" in env.labels()
+    for _ in range(3):
+        await env.press(OWNER, "▶️")
+    assert "5/5" in env.labels()
     assert not any(label == "▶️" for label in env.labels())
     await env.press(OWNER, "◀️")
-    assert "2/3" in env.labels()
+    assert "4/5" in env.labels()
 
 
 async def test_admin_cannot_open_owner_section_by_forged_callback(senv: SEnv) -> None:
@@ -176,7 +177,7 @@ async def test_garbage_section_arg_goes_back_to_root(senv: SEnv) -> None:
     await add_staff(senv)
     for arg in ("nope", "sales:x:1", "sales:1:7", "sales:1"):
         await senv.click(OWNER, f"v1:{SCREEN_SECTION}:o:{arg}")
-        assert "Настройки" in senv.text, arg
+        assert "Все настройки" in senv.text, arg
 
 
 # ---------------------------------------------------------------- cards
@@ -198,7 +199,12 @@ async def test_card_shows_everything_about_a_key(senv: SEnv) -> None:
     assert "✏️ Изменить" in labels
     assert "↩️ По умолчанию" not in labels  # already the default
     assert "🕘 История" in labels
-    assert decode(senv.button("Назад")) is not None
+    assert text.rstrip().endswith("Ключ в .env: <code>TRIAL_DAYS</code>")  # the .env name comes last
+    assert labels[:3] == ["1", "✅ 3", "7"]  # ready values, the current one marked
+    assert senv.button("✅ 3") == f"v1:{ACTIONS}:pick:TRIAL_DAYS:3"
+    # back to where the key lives in the admin: «📦 Тарифы → 🎁 Пробный период»
+    assert senv.button("Пробный период") == "v1:set.v:o:p.trial"
+    assert senv.button("🛠 Админка") == "v1:adm:o"
 
 
 async def test_card_of_reload_and_restart_keys(senv: SEnv) -> None:
@@ -232,10 +238,11 @@ async def test_enum_card_has_choice_buttons(senv: SEnv) -> None:
     await add_staff(senv)
     await senv.click(OWNER, key_cb("TRIAL_AUDIENCE"))
     labels = senv.labels()
-    assert "✅ all" in labels
-    assert "channel_members" in labels
+    assert "✅ Всем" in labels  # values by their labels, not «all» / «channel_members»
+    assert "Только подписчикам канала" in labels
     assert "✏️ Изменить" not in labels
-    assert senv.button("channel_members") == f"v1:{ACTIONS}:pick:TRIAL_AUDIENCE:channel_members"
+    assert senv.button("Только подписчикам") == f"v1:{ACTIONS}:pick:TRIAL_AUDIENCE:channel_members"
+    assert "channel_members" not in senv.text
 
 
 async def test_card_accepts_aliases_and_case(senv: SEnv) -> None:
@@ -247,7 +254,7 @@ async def test_card_accepts_aliases_and_case(senv: SEnv) -> None:
 async def test_unknown_key_is_stale(senv: SEnv) -> None:
     await add_staff(senv)
     await senv.click(OWNER, key_cb("NO_SUCH_KEY"))
-    assert "Настройки" in senv.text
+    assert "Все настройки" in senv.text
     assert "NO_SUCH_KEY" not in senv.text
 
 

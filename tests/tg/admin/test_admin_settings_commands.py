@@ -50,7 +50,7 @@ async def test_search_too_short_and_cancel(senv: SEnv) -> None:
     assert await senv.type(OWNER, "x")
     assert "Слишком коротко" in senv.text
     await senv.press(OWNER, "Отмена")
-    assert "Настройки" in senv.text
+    assert "Все настройки" in senv.text
 
 
 async def test_find_screen_masks_tokens_in_the_query(senv: SEnv) -> None:
@@ -129,7 +129,7 @@ async def test_set_unknown_key_with_token_value_is_deleted_and_not_echoed(senv: 
 async def test_set_without_value_and_search(senv: SEnv) -> None:
     await add_staff(senv)
     assert await run_set(senv, OWNER, "/set")
-    assert "Настройки" in senv.text
+    assert "Все настройки" in senv.text
     assert await run_set(senv, OWNER, "/set TRIAL_DAYS", message_id=901)
     assert "<code>TRIAL_DAYS</code>" in senv.text
     assert await run_set(senv, OWNER, "/set пробный период", message_id=902)
@@ -211,7 +211,7 @@ async def test_done_screen_belongs_to_its_user(senv: SEnv) -> None:
     batch = next(iter(senv.screens._results))
     await senv.click(ADMIN, f"v1:{SCREEN_DONE}:o:{batch}")
     assert "Применено" not in senv.text
-    assert "Настройки" in senv.text
+    assert "Все настройки" in senv.text
 
 
 async def test_user_loader_failure_is_contained(senv: SEnv) -> None:
@@ -227,7 +227,7 @@ async def test_user_loader_failure_is_contained(senv: SEnv) -> None:
 async def test_settings_command(senv: SEnv) -> None:
     await add_staff(senv)
     assert await senv.screens.handle_settings(text_message(ADMIN, "/settings"))
-    assert "Настройки" in senv.text
+    assert "Все настройки" in senv.text
     assert isinstance(senv.last(), SendMessage)
     assert not await senv.screens.handle_settings(text_message(USER, "/settings"))
     assert not await senv.screens.handle_settings(text_message(SUPPORT, "/settings"))

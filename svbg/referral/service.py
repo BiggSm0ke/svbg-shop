@@ -347,6 +347,8 @@ class ReferralService:
             raise PermanentJobError("повреждённая задача рефералки")
         rules = self.rules()
         async with self._db.tx() as conn:
+            if not job.payload.get("after_captcha") and await self._behind_captcha(conn, referred):
+                return  # the welcome and the days «за переход» wait for the captcha (captcha_passed)
             people = await self._people(conn, (referred, referrer), lock=False)
             invitee, inviter = people.get(referred), people.get(referrer)
             if invitee is None or inviter is None:
@@ -357,6 +359,41 @@ class ReferralService:
                 await self._enqueue_pair(conn, referred)
         if self.bus is not None:
             await self.bus.publish(Event(EVENT_ATTACHED, {"user_id": referred, "referrer_id": referrer}))
+
+    def _captcha_on(self) -> bool:
+        """``CAPTCHA_ENABLED`` (a config without the key, as in old setups, means off)."""
+        try:
+            return bool(self._config().get("CAPTCHA_ENABLED"))
+        except Exception:  # noqa: BLE001 - a broken snapshot: do not hold anything back
+            return False
+
+    async def _behind_captcha(self, conn: AsyncConnection, user_id: int) -> bool:
+        """The invited user still has to pass the entry captcha (a plain user while it is on). A bot that
+        never passes it brings its inviter neither a message nor days."""
+        if not self._captcha_on():
+            return False
+        role = await conn.scalar(sa.select(users.c.role).where(users.c.id == user_id))
+        return role in (None, "user")
+
+    async def captcha_passed(self, user_id: int) -> bool:
+        """The user passed the entry captcha: queue the welcome (and the days «за переход») that waited for
+        it. ``False`` when nobody invited them."""
+        async with self._db.tx() as conn:
+            referrer = await conn.scalar(
+                sa.select(referrals.c.referrer_id).where(referrals.c.referred_user_id == user_id)
+            )
+            if referrer is None:
+                return False
+            await enqueue(
+                conn,
+                JOB_ATTACHED,
+                {"referred_user_id": user_id, "referrer_id": int(referrer), "after_captcha": True},
+                queue=JOB_QUEUE,
+                lane="interactive",
+                dedup_key=f"ref:att:{user_id}",
+                max_attempts=5,
+            )
+        return True
 
     @staticmethod
     def _welcome(rules: Rules, invitee: _Person, inviter: _Person) -> list[tuple[int, str, dict[str, Any]]]:
@@ -498,7 +535,9 @@ class ReferralService:
                 .with_for_update()
             )
             sides = await self._sides(conn, referred_user_id)
-            qualifies, stats = await self._facts(conn, rules, referred_user_id, referrer_id, at)
+            qualifies, stats = await self._facts(
+                conn, rules, referred_user_id, referrer_id, at, captcha_on=self._captcha_on()
+            )
             pair = PairState(
                 referred_user_id=referred_user_id,
                 referrer_id=referrer_id,
@@ -593,10 +632,20 @@ class ReferralService:
 
     @staticmethod
     async def _facts(
-        conn: AsyncConnection, rules: Rules, referred: int, referrer: int, at: datetime
+        conn: AsyncConnection,
+        rules: Rules,
+        referred: int,
+        referrer: int,
+        at: datetime,
+        *,
+        captcha_on: bool = False,
     ) -> tuple[bool, InviterStats]:
-        """Whether the invited user meets the trigger, and the inviter's granted counters (one SELECT)."""
+        """Whether the invited user meets the trigger, and the inviter's granted counters (one SELECT).
+        «Сразу за переход» counts only once the invited user passed the entry captcha (while it is on)."""
         rr = referral_rewards
+        passed = sa.exists().where(
+            users.c.id == referred, sa.or_(users.c.captcha_passed_at.is_not(None), users.c.role != "user")
+        )
         paid = sa.exists().where(
             subscription_events.c.subscription_id == subscriptions.c.id,
             subscriptions.c.user_id == referred,
@@ -612,6 +661,7 @@ class ReferralService:
                 sa.select(
                     paid.label("paid"),
                     trial.label("trial"),
+                    passed.label("passed"),
                     sa.select(sa.func.count())
                     .where(granted, rr.c.granted_at > at - CAP_WINDOW)
                     .scalar_subquery()
@@ -621,7 +671,7 @@ class ReferralService:
             )
         ).one()
         if rules.trigger is Trigger.REGISTER:
-            qualifies = True
+            qualifies = bool(row.passed) or not captcha_on
         elif rules.trigger is Trigger.TRIAL_OR_PAID:
             qualifies = bool(row.paid or row.trial)
         else:

@@ -13,6 +13,7 @@ from aiogram.methods import (
     AnswerCallbackQuery,
     DeleteMessage,
     EditMessageCaption,
+    EditMessageMedia,
     EditMessageText,
     SendMessage,
     SendPhoto,
@@ -99,13 +100,14 @@ async def test_open_content_screen_answers_first_then_edits(env: Env) -> None:
     assert state.main_msg_id == 10 and state.main_shape == MessageShape("text")
 
 
-async def test_admin_sees_settings_button_and_can_open_it(env: Env) -> None:
+async def test_admin_sees_one_admin_button_and_settings_still_open(env: Env) -> None:
     await env.add(222, role="admin")
     await env.router.dispatch_callback(callback(222, "v1:home:o"))
     edit = env.transport.of(EditMessageText)[-1]
     assert edit.reply_markup is not None
     data = [b.callback_data for row in edit.reply_markup.inline_keyboard for b in row]
-    assert "v1:settings_root:o" in data
+    assert "v1:admin:o" in data  # the one staff entry; settings and plans live inside the admin
+    assert "v1:settings_root:o" not in data and "v1:plans:o" not in data
     await env.router.dispatch_callback(callback(222, "v1:settings_root:o"))
     assert env.transport.of(EditMessageText)[-1].text.startswith("⚙️")
 
@@ -398,19 +400,16 @@ async def test_text_media_transitions(env: Env, db: CountingDatabase) -> None:
     user = await env.add(111)
     await _media_screen(db, "promo", file_ids={"42": "CACHED"})
     await env.content.reload()
-    # text → media: send a new photo, delete the old text message
+    # text → media: one editMessageMedia, the message stays in place
     await env.router.dispatch_callback(callback(111, "v1:promo:o"))
-    (photo,) = env.transport.of(SendPhoto)
-    assert photo.photo == "CACHED" and photo.caption == "Экран promo" and photo.parse_mode is None
-    (deleted,) = env.transport.of(DeleteMessage)
-    assert deleted.message_id == 10
+    assert env.transport.of(SendPhoto) == [] and env.transport.of(DeleteMessage) == []
+    (edit,) = env.transport.of(EditMessageMedia)
+    assert (
+        edit.media.media == "CACHED" and edit.media.caption == "Экран promo" and edit.media.parse_mode is None
+    )
     state = await env.ui_state.get(user.user_id)
     new_id = state.main_msg_id
-    assert (
-        new_id is not None
-        and new_id != 10
-        and state.main_shape == MessageShape("photo", f"m:{photo_media_id(state)}")
-    )
+    assert new_id == 10 and state.main_shape == MessageShape("photo", f"m:{photo_media_id(state)}")
     # same media again → caption-only edit (shape comes from ui_state)
     await env.router.dispatch_callback(callback(111, "v1:promo:o", message_id=new_id, photo=True))
     assert len(env.transport.of(EditMessageCaption)) == 1
@@ -503,14 +502,14 @@ async def test_upload_from_disk_caches_file_id(db: CountingDatabase, tmp_path: P
         await _media_screen(db, "evil", path="../secret.jpg", sha="c")
         await env.content.reload()
         await env.router.dispatch_callback(callback(111, "v1:banner:o"))
-        (photo,) = env.transport.of(SendPhoto)
-        assert isinstance(photo.photo, FSInputFile)
+        (edit,) = env.transport.of(EditMessageMedia)
+        assert isinstance(edit.media.media, FSInputFile)
         assert env.content.file_id(mid, 42) == "TG-FILE-ID"
         rows = await db.raw("select file_ids from media where id = $1", mid)
         assert rows[0]["file_ids"] == {"42": "TG-FILE-ID"}
         # path traversal is refused: the screen renders without media
         await env.router.dispatch_callback(callback(111, "v1:evil:o", photo=True, message_id=900))
-        assert len(env.transport.of(SendPhoto)) == 1
+        assert len(env.transport.of(EditMessageMedia)) == 1 and env.transport.of(SendPhoto) == []
         assert env.transport.of(SendMessage)[-1].text == "Экран evil"
 
 
@@ -693,7 +692,8 @@ async def test_screen_buttons_table_has_seeded_system_keys(db: CountingDatabase)
     async with make_env(db):
         rows = await db.raw("select system_key from screen_buttons order by id")
     seeded = {b.system_key for screen in defaults.SYSTEM_SCREENS for b in screen.buttons}
-    assert {r["system_key"] for r in rows} == seeded and {"settings", "home"} <= seeded
+    assert {r["system_key"] for r in rows} == seeded and {"admin", "home"} <= seeded
+    assert not {"settings", "plans"} & seeded  # one staff entry on home: «🛠 Админка»
     assert screen_buttons.name == "screen_buttons"
 
 

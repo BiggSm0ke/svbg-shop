@@ -50,10 +50,10 @@ from svbg.catalog.model import (
 from svbg.catalog.preset import STANDARD_CODE, seed_owner_preset
 from svbg.catalog.service import CatalogService, CatalogSnapshot, count_plan_subscribers
 from svbg.catalog.squads_job import enqueue_apply_squads
-from svbg.content.defaults import HOME
 from svbg.core.money import format_money, parse_money
 from svbg.remnawave.errors import RemnawaveError
 from svbg.remnawave.transport import Lane
+from svbg.tg.admin import nav
 from svbg.tg.ui.forms import Field, Form, ValidationError, integer
 from svbg.tg.ui.forms import text as text_validator
 from svbg.tg.ui.renderer import nav_button
@@ -90,6 +90,7 @@ SCREEN_AVAIL: Final = "pl.av"
 SCREEN_RESET: Final = "pl.rs"
 SCREEN_DEVICES: Final = "pl.dv"
 SCREEN_LOCATIONS: Final = "locs"
+SLICE_SCREEN: Final = "set.v"  # svbg.tg.admin.slices.SCREEN
 SCREEN_LOCATION: Final = "loc"
 ACTIONS: Final = "pla"
 
@@ -130,8 +131,9 @@ _T: Final[dict[str, str]] = {
     "new": "➕ Новый тариф",
     "preset": "⭐ Пресет «Стандарт» 179–1699 ₽",
     "locations": "📍 Локации",
-    "menu": "🏠 Меню",
     "back": "⬅️ Назад",
+    "trial": "🎁 Пробный период",
+    "rules": "⚙️ Правила подписки",
     "to_list": "⬅️ К тарифам",
     "to_card": "⬅️ К тарифу",
     "st_trial_on": "🎁 Пробный тариф · включён",
@@ -247,6 +249,11 @@ _T: Final[dict[str, str]] = {
     "f_loc_name": "✏️ Название локации для покупателей (например, «Нидерланды»):",
     "f_loc_flag": "🏳️ Флаг локации — один эмодзи (например, 🇳🇱):",
 }
+
+
+def _settings_allowed(user: Any) -> bool:
+    """The trial and subscription-rule slices are settings: owner, or an admin with ``settings.business``."""
+    return user.role == "owner" or (user.at_least("admin") and user.has_perm("settings.business"))
 
 
 class _Stop(Exception):  # control flow, not an error
@@ -536,9 +543,9 @@ class PlanScreens:
     # ------------------------------------------------------------ list & card
 
     async def _list_screen(self, ctx: ScreenCtx, _arg: Any) -> View:
-        return self.list_view()
+        return self.list_view(ctx.user)
 
-    def list_view(self) -> View:
+    def list_view(self, user: Any = None) -> View:
         snap, cur = self.snap, self.currency()
         lines = [_T["list_title"], "", _T["list_hint"] if snap.plans else _T["list_empty"]]
         rows: list[list[InlineKeyboardButton]] = []
@@ -550,7 +557,10 @@ class PlanScreens:
         if snap.by_code(STANDARD_CODE) is None and cur == "RUB":  # the owner's preset is in rubles
             rows.append([nav_button(_T["preset"], ACTIONS, "preset")])
         rows.append([nav_button(_T["locations"], SCREEN_LOCATIONS)])
-        rows.append([nav_button(_T["menu"], HOME)])
+        if user is not None and _settings_allowed(user) and nav.has_screen(self.router, SLICE_SCREEN):
+            rows.append([nav_button(_T["trial"], SLICE_SCREEN, arg="p.trial")])
+            rows.append([nav_button(_T["rules"], SLICE_SCREEN, arg="p.more")])
+        rows.append(nav.back_row(SCREEN_LIST))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     async def _card_screen(self, ctx: ScreenCtx, arg: Any) -> View:

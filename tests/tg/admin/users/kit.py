@@ -17,7 +17,8 @@ from svbg.catalog.service import CatalogService
 from svbg.content.store import ContentStore
 from svbg.core.clock import now
 from svbg.services.roles import ADMIN_PERMS, Limits
-from svbg.tg.admin.dashboard import Dashboard, DashboardScreens
+from svbg.tg.admin.dashboard import Dashboard
+from svbg.tg.admin.menu import AdminMenu
 from svbg.tg.admin.roles import RoleScreens
 from svbg.tg.admin.users.ops import UserOps
 from svbg.tg.admin.users.screens import UserScreens
@@ -91,6 +92,7 @@ class UEnv:
     denied: list[tuple[int, str]]
     settings: dict[str, Any]
     ids: dict[int, int] = field(default_factory=dict)  # telegram id → users.id
+    menu: Any = None  # svbg.tg.admin.menu.AdminMenu
 
     async def add(
         self,
@@ -256,6 +258,8 @@ async def build_uenv(
     settings: dict[str, Any] | None = None,
     staff: bool = True,
     module_perms: tuple[tuple[str, str], ...] = (),
+    settings_service: Any = None,
+    components: Any = None,
 ) -> UEnv:
     async with db.tx() as conn:
         await ensure_indexes(conn)
@@ -310,7 +314,8 @@ async def build_uenv(
         module_perms=lambda: module_perms,
     ).install()
     dashboard = Dashboard(db, timezone=lambda: values["TIMEZONE"])
-    DashboardScreens(router, dashboard).install()
+    menu = AdminMenu(router, dashboard, settings=settings_service, components=components)
+    menu.install()
     env = UEnv(
         db,
         transport,
@@ -326,6 +331,7 @@ async def build_uenv(
         dashboard,
         denied,
         values,
+        menu=menu,
     )
     if staff:
         await env.staff()

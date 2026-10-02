@@ -9,6 +9,8 @@
 * ``chan`` — «Подпишитесь на канал» with «✅ Я подписался» (a fresh ``getChatMember``); after a successful
   check the trial (or the menu) continues.
 * ``lang`` — the language list; the choice is stored and the cached context dropped.
+* ``/start`` — the deep link is kept as the pending intent, then the entry captcha
+  (:mod:`svbg.tg.user.captcha`) for a user who has not passed it, then the channel gate when required.
 """
 
 from __future__ import annotations
@@ -18,10 +20,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
-from aiogram.types import InlineKeyboardButton
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from svbg.billing.ports import UiRef
 from svbg.core.clock import now
+from svbg.tg.ui import codec
 from svbg.tg.ui.renderer import nav_button
 from svbg.tg.ui.view import Redirect, Toast, View
 from svbg.tg.user import seeds
@@ -31,11 +34,13 @@ from svbg.tg.user.deps import cfg_str
 from svbg.tg.user.directory import SUPPORTED_LANGS
 from svbg.tg.user.jobs import enqueue_ui_ready
 from svbg.tg.user.render import screen_view
+from svbg.tg.user.subscription import apply_sub_button, sub_button, sub_thresholds
 from svbg.tg.user.texts import t
 
 if TYPE_CHECKING:
     from svbg.tg.ui.context import UserCtx
     from svbg.tg.ui.router import HandlerResult, ScreenCtx, ScreenRouter
+    from svbg.tg.user.captcha import CaptchaScreens
 
 __all__ = ["CHANNEL_GATE_ALL", "HomeScreens"]
 
@@ -46,12 +51,34 @@ CHANNEL_GATE_ALL: Final = "all"
 _LANG_LABELS: Final = {"ru": "btn_lang_ru", "en": "btn_lang_en"}
 _SYS_ALIASES: Final = {
     "buy": seeds.BUY,
-    "renew": seeds.BUY,
+    "sub": seeds.SUB,
     "topup": seeds.BALANCE,
     "connect": seeds.CONNECT,
     "devices": seeds.DEVICES,
     "lang": seeds.LANG,
 }
+
+
+#: The staff entry of home (``admin`` is the code alias of the admin root ``adm``).
+_STAFF_TARGETS: Final = frozenset({codec.encode("admin"), codec.encode("adm")})
+
+
+def _rows(keyboard: Any) -> list[list[InlineKeyboardButton]]:
+    if keyboard is None:
+        return []
+    if isinstance(keyboard, InlineKeyboardMarkup):
+        return [list(r) for r in keyboard.inline_keyboard]
+    return [list(r) for r in keyboard]
+
+
+def _with_support(
+    rows: list[list[InlineKeyboardButton]], support: list[list[InlineKeyboardButton]]
+) -> list[list[InlineKeyboardButton]]:
+    """``support`` above the trailing staff rows (at the very bottom when there are none)."""
+    cut = len(rows)
+    while cut > 0 and rows[cut - 1] and all(b.callback_data in _STAFF_TARGETS for b in rows[cut - 1]):
+        cut -= 1
+    return [*rows[:cut], *support, *rows[cut:]]
 
 
 #: Called after an onboarding step is done (channel joined, language picked): the consent page or the kept
@@ -62,6 +89,8 @@ AfterOnboarding = Callable[["ScreenCtx"], Awaitable["HandlerResult | None"]]
 class HomeScreens(Base):
     #: Set by the app (pages + deep links); ``None`` in the plain user path.
     after_onboarding: AfterOnboarding | None = None
+    #: The entry captcha, set by :class:`~svbg.tg.user.wiring.UserPath`; ``None`` → no captcha.
+    captcha: CaptchaScreens | None = None
 
     async def _resume(self, ctx: ScreenCtx) -> HandlerResult | None:
         hook = self.after_onboarding
@@ -96,9 +125,15 @@ class HomeScreens(Base):
     # ------------------------------------------------------------------ home
 
     async def home(self, ctx: ScreenCtx, _arg: Any) -> View:
+        """The card; «📱 Подписка» gets the time left and its colour from the status read here (no extra SQL),
+        «💬 Поддержка» goes right above the staff row, as in Bedolaga's menu."""
         status = await self.enrich(ctx)
         lang = ctx.lang
-        return screen_view(ctx, seeds.HOME, self.status_values(status, lang), bottom=self.support_row(lang))
+        view = screen_view(ctx, seeds.HOME, self.status_values(status, lang))
+        blue, red = sub_thresholds(self.deps.config)
+        rows = apply_sub_button(_rows(view.keyboard), sub_button(status, lang, blue_days=blue, red_days=red))
+        view.keyboard = _with_support(rows, self.support_row(lang))
+        return view
 
     # ------------------------------------------------------------------ language
 
@@ -169,20 +204,34 @@ class HomeScreens(Base):
             return resumed
         return Redirect(seeds.HOME)
 
+    async def channel_closed(self, user: UserCtx) -> bool:
+        """The required channel stops this user (``CHANNEL_REQUIRED_FOR=all`` and not a member; cached)."""
+        if not self.gate_for_all() or user.telegram_id is None or user.at_least("support"):
+            return False
+        channel = self.deps.channel
+        assert channel is not None
+        return await channel.is_member(user.telegram_id) is False
+
     async def on_start(self, user: UserCtx, chat_id: int, link: DeepLink | None) -> tuple[str, Any] | None:
-        """``/start``: keep the deep link as the pending intent (stage 3b); the channel gate when required."""
+        """``/start``: keep the deep link as the pending intent (stage 3b); the entry captcha for a user who
+        has not passed it; the channel gate when required."""
         del chat_id
         if link is not None:
             try:
                 await self.deps.screens.ui_state.set_pending_intent(user.user_id, link.as_intent())
             except Exception:  # noqa: BLE001 - the intent is a convenience; /start must work without it
                 log.warning("could not store the deep link intent of user %s", user.user_id)
-        if not self.gate_for_all() or user.telegram_id is None or user.at_least("support"):
-            return None
-        channel = self.deps.channel
-        assert channel is not None
-        member = await channel.is_member(user.telegram_id)
-        return (seeds.CHANNEL, None) if member is False else None
+        if self.captcha is not None and self.captcha.required(user):
+            return (seeds.CAPTCHA, None)
+        return (seeds.CHANNEL, None) if await self.channel_closed(user) else None
+
+    async def after_captcha(self, ctx: ScreenCtx) -> HandlerResult:
+        """The captcha is passed: what ``/start`` shows next (the channel gate, the kept intent, home)."""
+        if await self.channel_closed(ctx.user):
+            return Redirect(seeds.CHANNEL)
+        if (resumed := await self._resume(ctx)) is not None:
+            return resumed
+        return Redirect(seeds.HOME)
 
     # ------------------------------------------------------------------ trial
 

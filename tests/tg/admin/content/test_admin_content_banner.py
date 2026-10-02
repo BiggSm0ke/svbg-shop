@@ -51,8 +51,8 @@ def _uploads(ce: CEnv) -> list[Any]:
 async def test_banner_is_uploaded_once_then_sent_by_file_id(ce: CEnv) -> None:
     user = await ce.add(USER, "user")
     await ce.click(USER, "home")
-    first = ce.last()
-    assert isinstance(first, SendPhoto) and isinstance(first.photo, InputFile)
+    first = ce.last()  # the text message becomes the picture in place
+    assert isinstance(first, EditMessageMedia) and isinstance(first.media.media, InputFile)
     rows = await ce.db.raw("select file_ids from media where sha256 = $1", banner_sha256())
     assert rows[0]["file_ids"] == {"42": "TG-FILE-ID"}  # learned after the first upload
 
@@ -81,12 +81,12 @@ async def test_concurrent_first_screens_upload_the_banner_once(ce: CEnv) -> None
     users = [USER + i for i in range(6)]
     for tg_id in users:
         await ce.add(tg_id, "user")
-    ce.transport.delay[SendPhoto] = 0.05  # the first upload is still in flight when the others arrive
+    ce.transport.delay[EditMessageMedia] = 0.05  # the first upload is still in flight when the others arrive
     await asyncio.gather(*(ce.click(tg_id, "home") for tg_id in users))
-    sent = ce.transport.of(SendPhoto)
+    sent = ce.transport.of(EditMessageMedia)
     assert len(sent) == len(users)
     assert len(_uploads(ce)) == 1  # the others waited for it and sent its file_id
-    assert sum(p.photo == "TG-FILE-ID" for p in sent) == len(users) - 1
+    assert sum(p.media.media == "TG-FILE-ID" for p in sent) == len(users) - 1
 
 
 async def test_screen_card_marks_the_banner_and_removes_it(ce: CEnv) -> None:

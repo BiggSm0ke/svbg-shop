@@ -53,8 +53,8 @@ from svbg.broadcasts.sender import (
     progress_text,
 )
 from svbg.broadcasts.service import Actor, BroadcastError, BroadcastService
-from svbg.content.defaults import HOME
 from svbg.core import clock
+from svbg.tg.admin import nav
 from svbg.tg.ui.renderer import nav_button
 from svbg.tg.ui.view import Redirect, Toast, View
 
@@ -100,7 +100,6 @@ _T: Final[dict[str, str]] = {
     ),
     "list_empty": "Рассылок пока не было.",
     "new": "➕ Новая рассылка",
-    "menu": "🏠 Меню",
     "to_list": "⬅️ К рассылкам",
     "to_card": "⬅️ К рассылке",
     "cancel": "✖️ Отмена",
@@ -332,7 +331,7 @@ class BroadcastScreens:
             label = str(bc.content.get("text") or describe(bc.content)).replace("\n", " ")
             label = label[:32] + ("…" if len(label) > 32 else "")
             rows.append([nav_button(f"{icon} #{bc.id} · {label}", SCREEN_CARD, arg=str(bc.id))])
-        rows.append([nav_button(_T["menu"], HOME)])
+        rows.append(nav.back_row(SCREEN_LIST))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     async def _card_screen(self, ctx: ScreenCtx, arg: Any) -> View:

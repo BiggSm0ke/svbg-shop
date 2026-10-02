@@ -109,7 +109,9 @@ def test_plain_view_falls_back_to_the_seed() -> None:
     assert view.text.startswith("👋 Hi, Ann!") and "S" in view.text
     assert view.entities and view.entities[0].type == "bold"
     labels = [b.text for row in view.keyboard or () for b in row]
-    assert "🛒 Buy" in labels and "⚙️ Settings" not in labels
+    assert "💰 Balance: {balance}" not in labels and "💰 Balance: 50 ₽" in labels
+    assert "📱 Subscription · {left}" in labels  # {left} is filled by the home route, not by the seed view
+    assert "🛒 Buy" not in labels and "⚙️ Settings" not in labels
     unknown = plain_view(user, None, "nope", fallback_text="fallback")
     assert unknown.text == "fallback"
 
@@ -119,6 +121,8 @@ async def test_screens_work_without_content_rows(pg_dsn: str) -> None:
         _uid, tg = await env.new_user()
         home = await env.open(tg)
         assert "Подписки пока нет." in home.text and "🎁 Попробовать бесплатно" in home.labels()
+        section = await env.press(tg, "Подписка")
+        assert "Сейчас подписки нет" in section.text
         periods = await env.press(tg, "Купить")
         assert "Выберите срок" in periods.text
 
@@ -134,7 +138,7 @@ async def test_language_switch(pg_dsn: str) -> None:
         assert (await env.rows("select language from users where id = $1", uid))[0]["language"] == "en"
         assert env.tg.toasts()[-1] == "Language changed"
         again = await env.click(tg, "v1:home:o")
-        assert "🛒 Buy" in again.labels()
+        assert "📱 Subscription" in again.labels() and "🌐 Language" in again.labels()
 
 
 async def test_trial_for_channel_members_goes_through_the_gate(pg_dsn: str) -> None:
@@ -208,6 +212,7 @@ async def test_cancel_and_i_paid(pg_dsn: str) -> None:
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user()
         await env.open(tg)
+        await env.press(tg, "Подписка")
         await env.press(tg, "Купить подписку")
         await env.press(tg, "1 мес.")
         invoice = await env.press(tg, "СБП")

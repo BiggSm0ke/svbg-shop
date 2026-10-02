@@ -164,7 +164,8 @@ async def test_addon_order_is_a_core_draft_paid_from_the_balance_and_releases_th
         assert block["status"] == "releasing" and block["release_reason"] == "topup"
         await env.drain()
         assert await env.panel_squads(sid) == [env.base]
-        assert ("lte", f"⚡ <b>LTE: докупка</b> · подписка №{sid}: +10 ГБ") in env.admin_chat.posts
+        card = next(r for r in env.admin_chat.reports if r.title == "LTE: докупка")
+        assert card.plain_text().splitlines()[1:] == [f"Подписка: №{sid}", "Добавлено: +10 ГБ"]
         # exactly once: a repeated apply does not add a second credit
         async with env.db.tx() as conn:
             await AddonLteKind(env.service).apply(conn, row, [])

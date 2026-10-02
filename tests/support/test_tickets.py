@@ -56,9 +56,9 @@ async def test_topic_card_and_copies_both_ways(kit: Kit) -> None:
     # time to the first answer goes to the daily report
     at = now()
     data = await collect(kit.db, at - timedelta(hours=1), at + timedelta(hours=1), at.date(), partial=True)
-    assert "🎫 Обращений: 1 · с ответом: 1 · первый ответ (медиана): меньше минуты" in render(
-        data, currency="RUB", tz_name="Europe/Moscow"
-    )
+    report = render(data, currency="RUB", tz_name="Europe/Moscow")
+    assert "Обращений: <b>1</b>, с ответом 1" in report
+    assert "Первый ответ: <b>меньше минуты</b>" in report
 
 
 async def test_close_and_reopen(kit: Kit) -> None:

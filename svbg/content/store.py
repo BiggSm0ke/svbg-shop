@@ -9,6 +9,9 @@ see either the old or the new version, never a mix. Bad rows never break the sna
 is dropped, a button with an invalid condition is hidden (fail-closed), an invalid screen is skipped; each
 case is listed in ``snapshot.problems`` for the admin UI.
 
+The first ``load()`` also deletes system buttons that are no longer seeded while they are untouched
+(``defaults.RETIRED_SYSTEM_BUTTONS``: the old staff buttons of ``home``).
+
 With ``media_root`` the first ``load()`` also installs the default banner (:mod:`svbg.content.banner`): the
 packaged picture goes to the media directory, new system screens are seeded with it and, once per
 installation, every system screen without a picture of its own gets it. A failure there is logged and never
@@ -429,9 +432,26 @@ class ContentStore:
                 created = await seed_system_screens(conn, banner=banner)
             if created:
                 log.info("content: seeded %d system rows", created)
+            await self._retire_buttons()
             if media_id is not None:
                 await self._migrate_banner(media_id, preview_ok)
         return await self.reload()
+
+    async def _retire_buttons(self) -> None:
+        """Old staff buttons of ``home`` that are no longer seeded go away while untouched, untouched home
+        buttons take the current layout (both isolated)."""
+        from svbg.content.editing import relayout_system_buttons, retire_system_buttons
+
+        try:
+            async with self._db.tx() as conn:
+                await retire_system_buttons(conn)
+        except Exception:  # never blocks the start; retried on the next one
+            log.exception("content: retiring old system buttons failed")
+        try:
+            async with self._db.tx() as conn:
+                await relayout_system_buttons(conn)
+        except Exception:  # never blocks the start; retried on the next one
+            log.exception("content: moving system buttons to the new layout failed")
 
     def _preview_ok(self) -> bool:
         try:
@@ -510,4 +530,16 @@ class ContentStore:
                 sa.update(media)
                 .where(media.c.id == media_id)
                 .values(file_ids=media.c.file_ids.op("||")(sa.func.jsonb_build_object(key, file_id)))
+            )
+
+    async def forget_file_id(self, media_id: int, bot_id: int | str) -> None:
+        """Drop a ``file_id`` Telegram refused (the next send uploads the file again)."""
+        key = str(bot_id)
+        self._file_ids.pop((media_id, key), None)
+        m = self._snapshot.media.get(media_id)
+        if m is not None and key in m.file_ids:
+            self._file_ids[(media_id, key)] = ""  # hides the snapshot's stale value until the next reload
+        async with self._db.tx() as conn:
+            await conn.execute(
+                sa.update(media).where(media.c.id == media_id).values(file_ids=media.c.file_ids.op("-")(key))
             )

@@ -43,6 +43,7 @@ NOT_LINKABLE: Final = frozenset(
         "reissue_done",
         "reissue_wait",
         "dev_reset",
+        "captcha",
     }
 )
 _NOT_LINKABLE_PREFIXES: Final = ("notify_",)

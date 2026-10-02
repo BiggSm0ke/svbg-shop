@@ -230,8 +230,10 @@ async def test_owner_link_end_to_end(
 
     newcomer = 8008
     tg.push_message(newcomer, "/start")
-    gate = await tg.wait_for("sendMessage", lambda c: c.params.get("chat_id") == newcomer, timeout=10)
-    assert "настраивается" in gate.params["text"]
+    gate = await tg.wait_for(
+        "sendMessage|sendPhoto", lambda c: c.params.get("chat_id") == newcomer, timeout=10
+    )
+    assert "настраивается" in gate.text
 
     out, err = io.StringIO(), io.StringIO()
     environ = {"DATA_DIR": str(app_env.data_dir)}
@@ -256,9 +258,9 @@ async def test_owner_link_end_to_end(
     start = len(tg.calls)
     tg.push_message(newcomer, f"/start setup_{code_value}")
     welcome = await tg.wait_for(
-        "sendMessage", lambda c: c.params.get("chat_id") == newcomer, timeout=10, start=start
+        "sendMessage|sendPhoto", lambda c: c.params.get("chat_id") == newcomer, timeout=10, start=start
     )
-    assert "владелец" in welcome.params["text"].lower()
+    assert "владелец" in welcome.text.lower()
     assert app.users is not None
     assert newcomer in await app.users.owner_ids()
 
@@ -266,6 +268,6 @@ async def test_owner_link_end_to_end(
     start = len(tg.calls)
     tg.push_message(9009, f"/start setup_{code_value}")
     again = await tg.wait_for(
-        "sendMessage", lambda c: c.params.get("chat_id") == 9009, timeout=10, start=start
+        "sendMessage|sendPhoto", lambda c: c.params.get("chat_id") == 9009, timeout=10, start=start
     )
-    assert "недействительна" in again.params["text"]
+    assert "недействительна" in again.text

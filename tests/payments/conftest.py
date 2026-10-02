@@ -397,6 +397,9 @@ class FakeAdminChat:
     async def post(self, kind: str, text: str, *, html: bool = False) -> None:
         self.posts.append((kind, text))
 
+    async def post_report(self, kind: str, report: Any) -> None:
+        self.posts.append((kind, report.html()))
+
 
 STUB_CONFIG = {"api_key": API_KEY, "signing_secret": SECRET}
 

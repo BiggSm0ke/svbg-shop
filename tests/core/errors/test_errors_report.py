@@ -100,14 +100,23 @@ def test_report_layout() -> None:
     visible = check_html(text)
     lines = text.split("\n")
     assert lines[0].startswith("🚨 <b>Не открылся блок LTE</b>")
-    assert "Где:" in visible and "screen:subscription (модуль lte)" in visible
-    assert "У кого: 3 пользователя, последний — #42; ×7 за 10 мин" in visible
+    assert "Где: <b>screen:subscription</b>" in lines and "Модуль: <b>lte</b>" in lines
+    assert "Сколько: <b>×7 за 10 мин</b>" in lines
+    assert "Кто: <b>3 пользователя, последний #42</b>" in lines
     assert "Что сделано: экран показан без блока LTE" in visible
     assert "Что проверить: Проверьте «Состояние → LTE»" in visible
-    assert "<blockquote expandable>" in text
-    assert text.endswith("</blockquote>")
-    assert "событие #99" in visible
-    assert "версия 0.1.0" in visible
+    assert "<blockquote expandable><b>Подробности</b>\nТип: <code>ValueError</code>" in text
+    assert "ValueError: bad value</blockquote>" in text
+    # the fingerprint stays visible under the folded details
+    assert lines[-1] == "группа <code>aaaaaaaaaaaa</code> · событие #99 · версия 0.1.0"
+
+
+def test_report_traceback_is_short() -> None:
+    stack = "\n".join(f'  File "svbg/mod{i}.py", line {i}, in f{i}' for i in range(40))
+    text = render_report(make_view(stack=stack))
+    check_html(text)
+    assert "mod39.py" in text and "mod25.py" in text and "mod24.py" not in text
+    assert "…\n  File" in text
 
 
 def test_reopened_and_muted_and_no_users() -> None:
@@ -124,7 +133,7 @@ def test_reopened_and_muted_and_no_users() -> None:
     )
     visible = check_html(text)
     assert text.startswith("⚠️ 🔁 снова · ")
-    assert "не связано с пользователем; один раз (всего ×12)" in visible
+    assert "Кто: не связано с пользователем" in visible and "Сколько: один раз (всего ×12)" in visible
     assert "Заглушено до 01.10 13:00 UTC" in visible
 
 

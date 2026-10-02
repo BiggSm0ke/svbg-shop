@@ -171,6 +171,7 @@ class UserDirectory:
             users.c.perms,
             users.c.language,
             users.c.banned_at,
+            users.c.captcha_passed_at,
             sa.literal_column("(xmax = 0)").label("inserted"),
         )
         async with self._db.tx() as conn:
@@ -192,6 +193,7 @@ class UserDirectory:
             lang=self._lang(row["language"]),
             is_new=bool(row["inserted"]),
             currency=str(self._setting("CURRENCY", "RUB")),
+            captcha_passed=row["captcha_passed_at"] is not None,
         )
 
     def _touch(self, telegram_id: int) -> None:
@@ -219,6 +221,20 @@ class UserDirectory:
         if telegram_id is not None:
             self.invalidate(telegram_id)
         return True
+
+    async def mark_captcha_passed(self, user_id: int, telegram_id: int | None) -> bool:
+        """Store that the user passed the entry captcha (the first time only) and drop the cached context.
+        ``True`` when this call stored it (``False``: it was already stored)."""
+        stmt = (
+            sa.update(users)
+            .where(users.c.id == user_id, users.c.captcha_passed_at.is_(None))
+            .values(captcha_passed_at=sa.func.now())
+        )
+        async with self._db.tx() as conn:
+            stored = (await conn.execute(stmt)).rowcount == 1
+        if telegram_id is not None:
+            self.invalidate(telegram_id)
+        return stored
 
     # ------------------------------------------------------------------ owners
 

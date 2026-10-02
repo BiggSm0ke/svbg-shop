@@ -134,6 +134,10 @@ class FakeChat:
         self.posts.append({"kind": kind, "text": text, **kwargs, "message_id": msg})
         return PostResult(kind, chat_id=-1001, message_id=msg, thread_id=7)
 
+    async def post_report(self, kind: str, report: Any, **kwargs: Any) -> PostResult:
+        """Records the report's HTML text (what goes where rich messages are refused) and the report."""
+        return await self.post(kind, report.html(), html=True, report=report, **kwargs)
+
     def last(self, ref: str) -> dict[str, Any]:
         return next(p for p in reversed(self.posts) if p.get("card_ref") == ref)
 

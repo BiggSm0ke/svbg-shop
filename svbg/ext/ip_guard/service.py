@@ -84,6 +84,7 @@ if TYPE_CHECKING:
     from svbg.jobs.queue import Job
     from svbg.jobs.worker import JobContext
     from svbg.remnawave.api import RemnawaveApi
+    from svbg.tg.report import Report
 
 __all__ = [
     "CARD_KIND",
@@ -1272,8 +1273,15 @@ class IpGuardService:
         rendered = await self.render_card(ref)
         if rendered is None:
             return
-        text, keyboard, pin = rendered
-        result = await self.admin_chat.post(TOPIC, text, html=True, buttons=keyboard, card_ref=ref, wait=True)
+        card, keyboard, pin = rendered
+        if hasattr(self.admin_chat, "post_report"):  # a rich message where the chat takes them
+            result = await self.admin_chat.post_report(
+                TOPIC, card, buttons=keyboard, card_ref=ref, wait=True
+            )
+        else:
+            result = await self.admin_chat.post(
+                TOPIC, card.html(), html=True, buttons=keyboard, card_ref=ref, wait=True
+            )
         if result is None or result.message_id is None or result.chat_id is None:
             return
         await self._store_card(ref, int(result.chat_id), int(result.message_id), pin)
@@ -1317,8 +1325,10 @@ class IpGuardService:
         async with self.db.tx() as conn:
             await conn.execute(sa.update(table).where(table.c.id == ident).values(pinned=want))
 
-    async def render_card(self, ref: str) -> tuple[str, list[list[InlineKeyboardButton]], bool] | None:
-        """``(html, keyboard, pinned?)`` of a card, from the database."""
+    async def render_card(
+        self, ref: str
+    ) -> tuple[Report, list[list[InlineKeyboardButton]], bool] | None:
+        """``(report, keyboard, pinned?)`` of a card, from the database."""
         kind, ident = _split_ref(ref)
         if ident is None:
             return None

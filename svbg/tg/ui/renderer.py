@@ -4,7 +4,7 @@
   ``icon_custom_emoji_id``, safe ``{placeholder}`` substitution. Static buttons are built once per snapshot
   and reused (memo on the template).
 * :func:`plan_transition` — text → text: ``editMessageText``; same media → ``editMessageCaption``; other
-  media → ``editMessageMedia``; text ↔ media: send a new message and delete the old one.
+  media (and text → media) → ``editMessageMedia``; media → text: send a new message and delete the old one.
 * Texts always go out with ``entities`` and ``parse_mode=None`` (the bot's default parse mode never applies
   to content), lengths are measured in UTF-16 code units (text 4096, caption 1024).
 
@@ -14,7 +14,9 @@ Nothing here performs I/O.
 from __future__ import annotations
 
 import enum
+import html
 import logging
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal
@@ -84,6 +86,7 @@ __all__ = [
     "plan_transition",
     "to_entities",
     "utf16_len",
+    "visible_len",
 ]
 
 log = logging.getLogger("svbg.tg.ui.renderer")
@@ -114,9 +117,22 @@ def utf16_len(text: str) -> int:
     return len(text) + sum(1 for ch in text if ord(ch) > 0xFFFF)
 
 
-def check_length(text: str, *, caption: bool) -> None:
+_TAG_RE: Final = re.compile(r"<[^>]*>")
+
+
+def visible_len(text: str, parse_mode: str | None = None) -> int:
+    """Length Telegram checks against its limits: counted after parsing (HTML tags and entities removed).
+
+    Markdown modes are measured raw (an upper bound): a little too strict, never too loose.
+    """
+    if parse_mode is not None and str(parse_mode).lower() == "html":
+        return utf16_len(html.unescape(_TAG_RE.sub("", text)))
+    return utf16_len(text)
+
+
+def check_length(text: str, *, caption: bool, parse_mode: str | None = None) -> None:
     limit = CAPTION_LIMIT if caption else TEXT_LIMIT
-    n = utf16_len(text)
+    n = visible_len(text, parse_mode)
     if n > limit:
         raise TextTooLongError(n, limit)
 
@@ -364,7 +380,8 @@ def content_view(
     """Render a content screen for ``ctx``: text with placeholders, keyboard, media or link preview.
 
     In ``preview`` media mode the image is shown as a link preview above the text (``preview_url``), so the
-    message stays a text message; without a public URL the screen falls back to an attachment.
+    message stays a text message; without a public URL the screen falls back to an attachment. A screen
+    without a picture of its own (the owner removed it) gets ``banner=False``: the default banner stays off.
     """
     block = entry.text(ctx.lang)
     text, entities = format_text(block.text, block.entities, ctx.placeholders())
@@ -379,6 +396,8 @@ def content_view(
         bot_username=bot_username,
     )
     view = View(text=text, entities=to_entities(entities), keyboard=keyboard)
+    if entry.screen.media_id is None:
+        view.banner = False
     if media is not None:
         if entry.screen.media_mode == "preview" and preview_url:
             view.preview = LinkPreviewOptions(url=preview_url, show_above_text=True, prefer_large_media=True)
@@ -457,13 +476,15 @@ def plan_transition(prev: MessageShape | None, new: MessageShape, *, force_new: 
         if prev.kind == new.kind and prev.media_key is not None and prev.media_key == new.media_key:
             return Op.EDIT_CAPTION
         return Op.EDIT_MEDIA
+    if new.is_media:  # Bot API 7.11+: editMessageMedia turns a text message into a media one in place
+        return Op.EDIT_MEDIA
     return Op.SEND_NEW_DELETE_OLD
 
 
 def _prepared_text(view: View, *, caption: bool) -> tuple[str, list[MessageEntity] | None]:
     entities = list(view.entities) if view.entities else None
     if view.parse_mode is not None:  # formatted by Telegram: cannot be cut safely, reject instead
-        check_length(view.text, caption=caption)
+        check_length(view.text, caption=caption, parse_mode=view.parse_mode)
         return view.text, None
     return fit_text(view.text, entities, CAPTION_LIMIT if caption else TEXT_LIMIT)
 

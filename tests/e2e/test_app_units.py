@@ -266,9 +266,11 @@ async def test_cancelled_run_still_stops_the_app(app_env: AppEnv) -> None:
 @pytest.mark.pg
 async def test_startup_report_reaches_the_owner(start_app: StartApp, app_env: AppEnv) -> None:
     await start_app(notify_owners_on_start=True)
-    call = await app_env.tg.wait_for("sendMessage", lambda c: c.params.get("chat_id") == OWNER_ID, timeout=10)
-    assert "запущен" in call.params["text"]
-    assert app_env.token not in call.params["text"]
+    call = await app_env.tg.wait_for(
+        "sendMessage|sendPhoto", lambda c: c.params.get("chat_id") == OWNER_ID, timeout=10
+    )
+    assert "запущен" in call.text
+    assert app_env.token not in call.text
 
 
 async def test_app_stop_before_start_is_noop(tmp_path: Path) -> None:
@@ -464,3 +466,50 @@ async def test_stop_releases_running_jobs_before_the_database_closes(start_app: 
         assert (row[0], row[1]) == ("ready", 0)  # handed back, not left running with a burned attempt
     finally:
         await probe.close()
+
+
+# ------------------------------------------------------------------ entry captcha hooks
+
+
+async def test_new_user_post_waits_for_the_captcha() -> None:
+    """Behind the entry captcha the «👤 Новые пользователи» post comes with the right tap, so bots that never
+    pass it are not announced; the waiting referral welcome is released at the same moment."""
+    from svbg.tg.ui.context import UserCtx
+
+    posted: list[int] = []
+    released: list[int] = []
+    required = [True]
+
+    class Events:
+        async def new_user(self, user_id: int) -> None:
+            posted.append(user_id)
+
+    class Referral:
+        async def captcha_passed(self, user_id: int) -> bool:
+            released.append(user_id)
+            return True
+
+    async def on_start(_user: Any, _chat: int, _link: Any) -> Any:
+        return ("captcha", None) if required[0] else None
+
+    app = App.__new__(App)
+    app._background = set()
+    app.admin_events = Events()  # type: ignore[assignment]
+    app.referral = Referral()  # type: ignore[assignment]
+    app._pages_wired = False
+    app.pages = None
+    app.user_path = types.SimpleNamespace(  # type: ignore[assignment]
+        captcha=types.SimpleNamespace(required=lambda _u: required[0]), on_start=on_start
+    )
+    bot = UserCtx(user_id=11, telegram_id=1011, role="user", is_new=True, captcha_passed=False)
+    assert await app._on_start(bot, 1011, None) == ("captcha", None)
+    await asyncio.sleep(0)
+    assert posted == []  # not yet: it may be a bot
+    await app._captcha_passed(bot)
+    await asyncio.sleep(0)
+    assert posted == [11] and released == [11]
+    required[0] = False  # the captcha is off: announced at /start as before
+    person = UserCtx(user_id=12, telegram_id=1012, role="user", is_new=True)
+    assert await app._on_start(person, 1012, None) is None
+    await asyncio.sleep(0)
+    assert posted == [11, 12]

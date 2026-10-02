@@ -17,6 +17,7 @@ from aiogram.methods import DeleteMessage, GetCustomEmojiStickers, SendMessage
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageEntity
 
 from svbg.content.premium import ProbeEcho
+from svbg.tg.banner import banner_scope
 from svbg.tg.ui import codec
 from svbg.tg.ui.edit_mode import ACTIONS
 
@@ -74,17 +75,18 @@ class TransportProbeSender:
                 ]
             ]
         )
-        sent = await self._transport.call(
-            SendMessage(
+        with banner_scope("off"):  # the probe reads back ``entities``: it must stay a plain text message
+            sent = await self._transport.call(
+                SendMessage(
+                    chat_id=chat_id,
+                    text=text,
+                    entities=[MessageEntity.model_validate(e) for e in entities],
+                    parse_mode=None,
+                    reply_markup=markup,
+                    disable_notification=True,
+                ),
                 chat_id=chat_id,
-                text=text,
-                entities=[MessageEntity.model_validate(e) for e in entities],
-                parse_mode=None,
-                reply_markup=markup,
-                disable_notification=True,
-            ),
-            chat_id=chat_id,
-        )
+            )
         if not isinstance(sent, Message):
             raise TypeError("the probe was not delivered")
         return ProbeEcho(sent.message_id, entities_json(sent.entities), _markup_json(sent.reply_markup))

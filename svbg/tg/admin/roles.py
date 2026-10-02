@@ -12,7 +12,8 @@
 
 Saving goes through :func:`svbg.services.roles.set_role` (owner re-checked in the database, ``admin_audit``
 in the same transaction), then the target's cached context is dropped so the new rights apply on the next
-click. The editor is opened from the user card («🎖 Роль») or from this list.
+click, and their «/» command menu is refreshed (:mod:`svbg.tg.admin.commands`). The editor is opened from the
+user card («🎖 Роль») or from this list (admin → «⚙️ Система» → «👮 Команда»).
 """
 
 from __future__ import annotations
@@ -30,8 +31,10 @@ from aiogram.types import InlineKeyboardButton
 from svbg.core.tables import users
 from svbg.services import roles
 from svbg.services.roles import ADMIN_PERMS, PERM_LABELS, ROLE_LABELS, RoleError
+from svbg.tg.admin import commands as staff_commands
+from svbg.tg.admin import nav
 from svbg.tg.admin.users import settings_reader
-from svbg.tg.admin.users.screens import ADMIN_HOME, ROLE_SCREEN, SCREEN_CARD, SCREEN_FIND
+from svbg.tg.admin.users.screens import ROLE_SCREEN, SCREEN_CARD, SCREEN_FIND
 from svbg.tg.ui.renderer import nav_button
 from svbg.tg.ui.view import Redirect, View
 
@@ -56,7 +59,7 @@ _ICON: Final = {"owner": "👑", "admin": "🛡", "support": "🎧", "user": "�
 _ROLE_ORDER: Final = ("user", "support", "admin", "owner")
 
 _T: Final[dict[str, str]] = {
-    "list_title": "👥 <b>Роли</b>",
+    "list_title": "👮 <b>Команда</b>",
     "list_hint": "Чтобы выдать роль, найдите человека и нажмите «🎖 Роль» в его карточке. "
     "Человек должен хотя бы раз написать боту.",
     "configured": "Владельцы из настроек (OWNER_IDS): {ids}",
@@ -78,6 +81,7 @@ _T: Final[dict[str, str]] = {
     "to_list": "⬅️ Роли",
     "admin": "⬅️ Админка",
     "find": "🔍 Найти пользователя",
+    "limits": "⚙️ Лимиты команды",
     "not_found": "Пользователь не найден",
     "no_name": "без имени",
 }
@@ -191,7 +195,10 @@ class RoleScreens:
         if not staff:
             lines.append(_T["staff_empty"])
         lines.append(_T["list_hint"])
-        rows.append([nav_button(_T["find"], SCREEN_FIND), nav_button(_T["admin"], ADMIN_HOME)])
+        rows.append([nav_button(_T["find"], SCREEN_FIND)])
+        if nav.has_screen(self.router, "set.v"):
+            rows.append([nav_button(_T["limits"], "set.v", arg="sys.team")])
+        rows.append(nav.back_row(SCREEN_LIST))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     # ------------------------------------------------------------ editor
@@ -337,6 +344,8 @@ class RoleScreens:
                 self.invalidate(change.telegram_id)
             except Exception:
                 log.exception("user cache invalidation failed")
+        if change.changed:
+            staff_commands.role_changed(self.router, change.telegram_id, change.new_role, change.new_perms)
         return await self.editor(uid, None, 0, note=_T["saved"] if change.changed else _T["unchanged"])
 
 

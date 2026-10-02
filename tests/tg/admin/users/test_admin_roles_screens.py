@@ -34,7 +34,7 @@ async def test_only_the_owner_manages_roles(env: UEnv) -> None:
 
 async def test_staff_list(env: UEnv) -> None:
     await env.click(OWNER, encode(SCREEN_LIST))
-    assert "Роли" in env.text and f"<code>{CONF_OWNER}</code>" in env.text
+    assert "Команда" in env.text and f"<code>{CONF_OWNER}</code>" in env.text
     labels = env.labels()
     assert any("👑 Влад" in lb for lb in labels)
     assert any("🛡 Админ" in lb and "(15)" in lb for lb in labels)
@@ -93,7 +93,7 @@ async def test_refusals_are_shown(env: UEnv) -> None:
     await env.click(OWNER, encode(SCREEN_EDIT, arg="999999"))
     assert "не найден" in env.text
     await env.click(OWNER, encode(SCREEN_EDIT, arg=f"{env.ids[USER]}:admin:99999"))
-    assert "Роли" in env.text  # a forged mask: back to the list
+    assert "Команда" in env.text  # a forged mask: back to the list
 
 
 async def test_owner_role_revoked_in_the_database_wins(env: UEnv) -> None:

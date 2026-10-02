@@ -243,7 +243,7 @@ UNKNOWN_PHOTO = MessageShape("photo")
         (None, TEXT, False, Op.SEND_NEW),
         (None, PHOTO_A, False, Op.SEND_NEW),
         (TEXT, TEXT, False, Op.EDIT_TEXT),
-        (TEXT, PHOTO_A, False, Op.SEND_NEW_DELETE_OLD),
+        (TEXT, PHOTO_A, False, Op.EDIT_MEDIA),
         (PHOTO_A, TEXT, False, Op.SEND_NEW_DELETE_OLD),
         (PHOTO_A, PHOTO_A, False, Op.EDIT_CAPTION),
         (PHOTO_A, PHOTO_B, False, Op.EDIT_MEDIA),

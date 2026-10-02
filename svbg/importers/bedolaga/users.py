@@ -4,6 +4,8 @@ the module tables all point at them.
 
 * ``deleted`` users are skipped unless they have a subscription, a balance or a payment row (money first);
 * ``blocked`` / kept ``deleted`` → ``bot_blocked_at``; language ``ru``/``en`` (anything else → ``ru``);
+* every imported user counts as having passed the entry captcha (``captcha_passed_at``): they already use
+  the bot;
 * ``trial_grants(source='import')`` for **everyone with a row in ``subscriptions``** (С12, R10: no second
   trial);
 * fields without a column yet (first payment / top-up time, personal discount, restrictions, notification
@@ -173,7 +175,15 @@ async def run(ctx: Ctx) -> None:
             updates.append({"b_id": uid, **values})
             rep.inc("users", "updated")
         else:
-            inserts.append({"id": uid, "telegram_id": tg, "created_at": r["created_at"] or t0, **values})
+            inserts.append(
+                {
+                    "id": uid,
+                    "telegram_id": tg,
+                    "created_at": r["created_at"] or t0,
+                    "captcha_passed_at": t0,
+                    **values,
+                }
+            )
             rep.inc("users", "created")
         if tg is None:
             rep.inc("users", "without_telegram")
@@ -187,7 +197,12 @@ async def run(ctx: Ctx) -> None:
         await ctx.conn.execute(
             sa.update(users)
             .where(users.c.id == sa.bindparam("b_id"))
-            .values({k: sa.bindparam(k) for k in _PROFILE}),
+            .values(
+                {
+                    **{k: sa.bindparam(k) for k in _PROFILE},
+                    "captcha_passed_at": sa.func.coalesce(users.c.captcha_passed_at, sa.func.now()),
+                }
+            ),
             updates,
         )
     await ctx.remember("user", remember)

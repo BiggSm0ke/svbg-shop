@@ -29,7 +29,8 @@ async def test_admin_adds_days_with_a_reason(env: UEnv) -> None:
     before = await paid_until(env, sid)
     await open_card(env, ADMIN)
     await env.press(ADMIN, "➕ Дни")
-    assert "Сколько дней" in env.text
+    assert "Сколько дней" in env.text and "+30" in env.labels()  # ready values first
+    await env.press(ADMIN, "✏️ Своё")
     await env.type(ADMIN, "0")
     assert "отличное от нуля" in env.text
     await env.type(ADMIN, "7")
@@ -109,7 +110,7 @@ async def test_role_revoked_after_the_menu_was_cached(env: UEnv) -> None:
     before = await paid_until(env, sid)
     await open_card(env, ADMIN)
     await env.press(ADMIN, "➕ Дни")
-    await env.type(ADMIN, "5")
+    await env.press(ADMIN, "+3")
     await env.db.raw("update users set role = 'user', perms = '[]'::jsonb where telegram_id = $1", ADMIN)
     await env.type(ADMIN, "компенсация")
     assert "Нет прав" in env.text

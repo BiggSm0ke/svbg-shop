@@ -4,7 +4,9 @@
 purchase message in place (``orders.ui_ref``) — «⏳ Оформляю…» becomes «✅ Оплачено … + 🔗 Подключиться»
 without any action of the user — or to send a new one when the old message cannot be edited (deleted,
 older than 48 h). A screen with a picture (the default banner, the owner's own one) keeps it: its caption is
-edited instead when the text fits a caption (1024); a longer text goes as a new message.
+edited instead when the text fits a caption (1024); a longer text goes as a new message. A new message gets
+the screen's own picture, the default banner, or nothing when the owner removed the screen's picture
+(:func:`svbg.tg.banner.view_scope`; the banner middleware does the sending part).
 ``Notice.screen`` is a content screen code: when the owner created such a screen its text wins (the
 notice's ``params`` are its ``{placeholders}``), the notice's functional buttons are always kept.
 
@@ -39,6 +41,7 @@ from aiogram.types import (
 
 from svbg.billing.ports import Button, Notice, UiRef
 from svbg.core.clock import now
+from svbg.tg.banner import view_scope
 from svbg.tg.ui import codec
 from svbg.tg.ui.context import UserCtx
 from svbg.tg.ui.renderer import CAPTION_LIMIT, TEXT_LIMIT, as_markup, fit_text, utf16_len
@@ -191,7 +194,8 @@ class UserMessenger:
         try:
             async with self._after_click(ref.chat_id):
                 try:
-                    await self._call(method, ref.chat_id)
+                    with view_scope(view):
+                        await self._call(method, ref.chat_id)
                 except TelegramBadRequest as e:
                     if _NO_TEXT not in (e.message or "").lower() or utf16_len(text) > CAPTION_LIMIT:
                         raise
@@ -228,7 +232,8 @@ class UserMessenger:
             reply_markup=_markup(view),
         )
         try:
-            sent = await self._call(method, chat_id)
+            with view_scope(view):
+                sent = await self._call(method, chat_id)
         except TelegramForbiddenError:
             return None
         if not isinstance(sent, Message):

@@ -12,7 +12,7 @@
     dispatcher.include_router(path.aiogram_router())    # Stars + receipts (before the screen router)
     worker_handlers.update(path.handlers())             # user.ui_ready, user.devices_refresh, notify.user
     path.install(bus); path.schedule(scheduler)         # panel events → notifications, fallback scanner
-    build_start_router(..., on_start=path.on_start)     # deep-link stub + required channel gate
+    build_start_router(..., on_start=path.on_start)     # deep-link stub, entry captcha, channel gate
 
 ``billing`` may be ``None`` while :class:`UserPathDeps` is built (it needs the messenger first): set
 ``path.deps.billing`` afterwards.
@@ -29,6 +29,7 @@ from aiogram import Router
 
 from svbg.services.notify_user import NotifyUser
 from svbg.tg.user.account import AccountScreens
+from svbg.tg.user.captcha import CaptchaScreens
 from svbg.tg.user.chat_payments import ChatPayments
 from svbg.tg.user.deps import UserPathDeps, cfg_int, cfg_str
 from svbg.tg.user.home import HomeScreens
@@ -37,6 +38,7 @@ from svbg.tg.user.messenger import SERIALIZE_WAIT_S, Caller, Serializer, UserMes
 from svbg.tg.user.notices import TelegramNotificationSender
 from svbg.tg.user.shop import ShopScreens
 from svbg.tg.user.status import StatusReader
+from svbg.tg.user.subscription import SubscriptionScreens
 from svbg.tg.user.tables import user_devices
 
 if TYPE_CHECKING:
@@ -101,8 +103,12 @@ class UserPath:
             bot_username=bot_username,
         )
         self.home = HomeScreens(deps, self.status)
+        self.captcha = CaptchaScreens(deps)
+        self.home.captcha = self.captcha
+        self.captcha.after = self.home.after_captcha
         self.shop = ShopScreens(deps, self.status)
         self.account = AccountScreens(deps, self.status)
+        self.subscription = SubscriptionScreens(deps, self.status)
         self.devices_watch = DevicesWatch(deps.users.activity)
         self.account.watch = self.devices_watch
         self.jobs = UserJobs(
@@ -139,13 +145,15 @@ class UserPath:
     # ------------------------------------------------------------------------------------------ wiring
 
     def register(self) -> None:
-        """Screens, actions and forms on the screen router (once)."""
+        """Screens, actions and forms on the screen router (once); the entry captcha becomes its gate."""
         if self._registered:
             return
         router = self.deps.screens
         self.home.register(router)
+        self.captcha.register(router)
         self.shop.register(router)
         self.account.register(router)
+        self.subscription.register(router)
         self._registered = True
 
     def aiogram_router(self) -> Router:

@@ -29,10 +29,10 @@ from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, Message
 
-from svbg.content.defaults import HOME
 from svbg.pages.service import DEFAULT_LANG, Page, PageError, PageService
 from svbg.pages.user import ALIAS_PREFIX, PageUserScreens
 from svbg.pages.user import SCREEN as USER_SCREEN
+from svbg.tg.admin import nav
 from svbg.tg.ui.forms import Field, Form
 from svbg.tg.ui.forms import text as text_validator
 from svbg.tg.ui.renderer import nav_button
@@ -71,7 +71,6 @@ _T: Final[dict[str, str]] = {
     "list_title": "📄 <b>Страницы</b>\n"
     "FAQ, правила, оферта, согласие и свои страницы. Включённые видят пользователи.",
     "new": "➕ Новая страница",
-    "menu": "🏠 Меню",
     "to_list": "⬅️ К страницам",
     "to_card": "⬅️ К странице",
     "on": "🟢 включена",
@@ -304,7 +303,7 @@ class PageAdminScreens:
             label = f"{state} {page.title_for(DEFAULT_LANG)} · v{page.version}"
             rows.append([nav_button(label[:64], SCREEN_CARD, arg=page.code)])
         rows.append([nav_button(_T["new"], ACTIONS, "new")])
-        rows.append([nav_button(_T["menu"], HOME)])
+        rows.append(nav.back_row(SCREEN_LIST))
         return View(text=_T["list_title"], parse_mode="HTML", keyboard=rows)
 
     async def _card_screen(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:

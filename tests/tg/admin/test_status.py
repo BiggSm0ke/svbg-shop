@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -164,9 +165,10 @@ async def test_owner_sees_everything(st: StEnv) -> None:
     assert "✅ Telegram-бот" in text
     assert "🔴 Remnawave — Панель недоступна с 11:58 UTC" in text
     assert "⚪ Админ-чат — Не подключён" in text
-    assert "panel: ждут 1 · в работе 0 · ошибок 1" in text
+    # queues as a table: name, waiting, running, failed
+    assert re.search(r"<pre>Очередь +Ждут +Идут +Ошибки\n[─ ]+\n(.+\n)*panel +1 +0 +1(\n|</pre>)", text)
     assert "jobs.purge: ошибка «OSError»" in text and "ok.task" not in text
-    assert "🚨 ×1 Непредвиденная ошибка — job:panel.write" in text
+    assert "🚨 <b>×1</b> Непредвиденная ошибка — job:panel.write" in text
     assert "✅ .env синхронизирован, запись 01.10 11:00 UTC" in text
     assert "В .env отклонены строки: TRIAL_DAYS" in text
     assert "Требует внимания: 2</b> (🔴 1 · 🟠 1)" in text
@@ -174,7 +176,7 @@ async def test_owner_sees_everything(st: StEnv) -> None:
     labels = st.env.labels()
     assert "⚠️ Требует внимания (2)" in labels
     assert any("Мастер настройки" in label for label in labels)
-    assert st.env.button("Техработы") == encode("set.key", "o", "MAINTENANCE_MODE")
+    assert st.env.button("Техработы") == encode("set.v", "o", "sys.maint")  # admin → ⚙️ Система → 🛠
 
 
 async def test_viewer_reads_without_owner_buttons(st: StEnv) -> None:

@@ -80,6 +80,7 @@ async def buy_month(shop: Shop, telegram_id: int) -> Any:
     person = chat(shop, telegram_id)
     await person.start()
     await shop.fund(telegram_id, 17_900)
+    await person.press("Подписка", expect="📱 Подписка")
     await person.press("Купить подписку", expect="Выберите срок")
     await person.press("1 мес.", expect="Спишем с баланса")
     await person.press("Оплатить 179")
@@ -160,11 +161,18 @@ async def test_lte_quota_block_topup_with_a_shortfall_and_release(
 
         # the user is told, with the pack button
         await until(
-            lambda: any("Трафик LTE исчерпан" in str(m.get("text")) for m in shop.tg.bot_messages(5_601)),
+            lambda: any(
+                "Трафик LTE исчерпан" in str(m.get("text") or m.get("caption"))
+                for m in shop.tg.bot_messages(5_601)
+            ),
             timeout=20,
             what="the exhausted notice",
         )
-        notice = next(m for m in shop.tg.bot_messages(5_601) if "Трафик LTE исчерпан" in str(m.get("text")))
+        notice = next(
+            m
+            for m in shop.tg.bot_messages(5_601)
+            if "Трафик LTE исчерпан" in str(m.get("text") or m.get("caption"))
+        )
         anna.main = int(notice["message_id"])
         await anna.tap("⚡ Докупить трафик LTE", expect="+5 ГБ")
         await anna.tap("+5 ГБ", expect="Подтвердить")

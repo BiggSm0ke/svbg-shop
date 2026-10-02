@@ -160,3 +160,28 @@ async def test_admin_cards_are_best_effort() -> None:
     ok = FakeAdminChat()
     await notify.post_cards(ok, ["x", "y"])
     assert ok.posts == [("lte", "x"), ("lte", "y")]
+
+
+async def test_admin_cards_are_reports() -> None:
+    chat = FakeAdminChat()
+    block = notify.card_report("block", sid=7, used="10", limit="10", reason="лимит")
+    await notify.post_cards(chat, [block, notify.card_report("release_all", n=3, reason="emergency")])
+    assert chat.reports[0] is block
+    assert chat.posts[0] == (
+        "lte",
+        "🚫 <b>LTE: блок</b>\n\nПодписка: <b>№7</b>\nИзрасходовано: <b>10 из 10 ГБ</b>\n"
+        "Причина: <b>лимит</b>",
+    )
+    assert "Снято: <b>3 шт.</b>" in chat.posts[1][1]
+    # a table-like rich message where the chat takes them
+    rich = block.rich().model_dump(exclude_none=True)
+    assert [b["type"] for b in rich["blocks"]] == ["heading", "table"]
+    # the job payload: structured fields, or the text of a job queued before the upgrade
+    topup = notify.card_from_payload({"card": "topup", "sid": 5, "gb": "10", "text": "old"})
+    assert isinstance(topup, notify.Report) and "Добавлено: +10 ГБ" in topup.plain_text()
+    assert notify.card_from_payload({"text": "⚡ old"}) == "⚡ old"
+    assert notify.card_from_payload({"card": "nope"}) is None
+    # an admin chat without post_report gets the HTML text
+    old = type("OldChat", (), {"post": FakeAdminChat.post, "posts": [], "fail": False})()
+    await notify.post_cards(old, [block])
+    assert old.posts == [("lte", block.html())]

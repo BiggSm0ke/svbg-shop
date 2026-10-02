@@ -37,25 +37,25 @@ async def test_ops_module_in_the_app(
     start = len(tg.calls)
     tg.push_callback(OWNER_ID, encode(SCREEN), 1)
     screen = await tg.wait_for(
-        "sendMessage",
-        lambda c: c.params.get("chat_id") == OWNER_ID and "Бэкапы и обновления" in str(c.params.get("text")),
+        "sendMessage|sendPhoto",
+        lambda c: c.params.get("chat_id") == OWNER_ID and "Бэкапы и обновления" in c.text,
         timeout=10,
         start=start,
     )
-    assert "Пароль бэкапов не задан" in screen.params["text"]
+    assert "Пароль бэкапов не задан" in screen.text
 
     start = len(tg.calls)
     tg.push_callback(OWNER_ID, encode(ACTIONS, A_BACKUP), screen.result["message_id"])
     toast = await tg.wait_for("answerCallbackQuery", lambda c: True, timeout=10, start=start)
-    assert "Бэкап запущен" in str(toast.params.get("text"))
+    assert "Бэкап запущен" in toast.text
     # No password, no admin group: the backup stays local and the owner gets a DM about it.
     done = await tg.wait_for(
-        "sendMessage",
-        lambda c: c.params.get("chat_id") == OWNER_ID and "Бэкап готов" in str(c.params.get("text")),
+        "sendMessage|sendPhoto",
+        lambda c: c.params.get("chat_id") == OWNER_ID and "Бэкап готов" in c.text,
         timeout=60,
         start=start,
     )
-    assert "BACKUP_PASSWORD" in done.params["text"]
+    assert "BACKUP_PASSWORD" in done.text
     backups = list(Path(app_env.data_dir, "backups").glob("svbg-*-manual.tar.gz"))
     assert len(backups) == 1
     assert tg.calls_for("sendDocument") == [], "unencrypted backups never go to Telegram"

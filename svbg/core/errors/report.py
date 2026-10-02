@@ -1,13 +1,19 @@
 """Human-readable Telegram HTML report for an error group.
 
-Format (07 §2.4.3)::
+Format (07 §2.4.3), in the look of the other admin chat reports (``key: <b>value</b>``)::
 
     🚨 <title>
-    Где: <place> (модуль <module>)
-    У кого: 3 пользователя, последний — #42; ×7 за 10 мин
+
+    Где: <place>
+    Модуль: <module>
+    Сколько: ×7 за 10 мин (всего ×12)
+    Кто: 3 пользователя, последний #42
     Что сделано: <handled>
     Что проверить: <hint>
-    <blockquote expandable>type, message, stack (masked), version, event id</blockquote>
+
+    <blockquote expandable>Подробности: type, message, the last lines of the stack (masked)</blockquote>
+
+    группа <fingerprint> · событие #id · версия
 
 Everything variable is masked (secrets, PII) and HTML-escaped; the result is hard-capped at 4096 UTF-16
 code units (the strictest reading of Telegram's limit), shrinking the stack first.
@@ -29,6 +35,9 @@ _MAX_PLACE = 200
 _MAX_HANDLED = 300
 _MAX_HINT = 600
 _MAX_MESSAGE = 600
+
+STACK_LINES = 15  # the bottom of the traceback: where it broke
+STACK_BUDGET = 1800
 
 _ICONS = {Severity.ERROR: "🚨", Severity.WARN: "⚠️", Severity.INFO: "ℹ️"}
 
@@ -123,7 +132,7 @@ def format_duration_ru(delta: timedelta) -> str:
     return f"{hours // 24} {plural_ru(hours // 24, 'день', 'дня', 'дней')}"
 
 
-def _who_line(view: ErrorGroupView) -> str:
+def _times(view: ErrorGroupView) -> str:
     started = view.episode_started_at or view.first_seen
     if view.episode_count <= 1:
         times = "один раз"
@@ -131,50 +140,54 @@ def _who_line(view: ErrorGroupView) -> str:
         times = f"×{view.episode_count} за {format_duration_ru(view.last_seen - started)}"
     if view.count > view.episode_count:
         times += f" (всего ×{view.count})"
+    return times
+
+
+def _who(view: ErrorGroupView) -> str:
     if view.users_count <= 0:
-        return f"не связано с пользователем; {times}"
+        return "не связано с пользователем"
     users = (
         f"{view.users_count} {plural_ru(view.users_count, 'пользователь', 'пользователя', 'пользователей')}"
     )
-    last = f", последний — #{view.last_user_id}" if view.last_user_id is not None else ""
-    return f"{users}{last}; {times}"
+    return users + (f", последний #{view.last_user_id}" if view.last_user_id is not None else "")
 
 
 def _header(view: ErrorGroupView) -> str:
+    """Title and ``key: <b>value</b>`` lines, the look of the other admin chat reports."""
     icon = _ICONS.get(Severity(view.severity), "🚨")
     title = _esc_cut(view.title or "Ошибка", _MAX_TITLE)
     prefix = "🔁 снова · " if view.reopened else ""
-    where = _esc_cut(view.place, _MAX_PLACE)
-    if view.module:
-        where += f" (модуль {_esc_cut(view.module, 60)})"
-    handled = _esc_cut(view.handled, _MAX_HANDLED) if view.handled else "—"
-    hint = _esc_cut(view.hint, _MAX_HINT) if view.hint else "—"
     lines = [
         f"{icon} {prefix}<b>{title}</b>",
-        f"<b>Где:</b> {where}",
-        f"<b>У кого:</b> {_esc(_who_line(view))}",
-        f"<b>Что сделано:</b> {handled}",
-        f"<b>Что проверить:</b> {hint}",
+        "",
+        f"Где: <b>{_esc_cut(view.place, _MAX_PLACE)}</b>",
     ]
+    if view.module:
+        lines.append(f"Модуль: <b>{_esc_cut(view.module, 60)}</b>")
+    lines.append(f"Сколько: <b>{_esc(_times(view))}</b>")
+    lines.append(f"Кто: <b>{_esc(_who(view))}</b>")
+    if view.handled:
+        lines.append(f"Что сделано: {_esc_cut(view.handled, _MAX_HANDLED)}")
+    if view.hint:
+        lines.append(f"Что проверить: {_esc_cut(view.hint, _MAX_HINT)}")
     if view.muted_until is not None and view.status == "muted":
         lines.append(f"🔕 Заглушено до {view.muted_until:%d.%m %H:%M} UTC")
     return "\n".join(lines)
 
 
-def _fit_stack(stack: str, budget: int) -> str:
+def _fit_stack(stack: str, budget: int, max_lines: int = STACK_LINES) -> str:
     """Escaped stack keeping the most recent (bottom) lines that fit ``budget`` UTF-16 units."""
     if budget <= 0 or not stack:
         return ""
     lines = clean(stack).rstrip("\n").split("\n")
     out: list[str] = []
     used = 0
-    for line in reversed(lines):
+    for n, line in enumerate(reversed(lines)):
         esc = _esc_cut(line, 300, cleaned=True)
         cost = utf16_len(esc) + 1
-        if used + cost > budget:
-            marker = "…"
+        if used + cost > budget or n >= max_lines:
             if used + 2 <= budget:
-                out.append(marker)
+                out.append("…")
             break
         out.append(esc)
         used += cost
@@ -182,29 +195,30 @@ def _fit_stack(stack: str, budget: int) -> str:
 
 
 def render_report(group: ErrorGroupView) -> str:
-    """Telegram HTML (parse_mode=HTML) report, ≤ 4096 UTF-16 code units, valid and masked."""
+    """Telegram HTML (parse_mode=HTML) report, ≤ 4096 UTF-16 code units, valid and masked.
+
+    The card stays a text message (it is edited on every repeat), so the banner comes as a link preview.
+    """
     header = _header(group)
-    tech_head = [f"Тип: <code>{_esc_cut(group.exc_type or '?', 200)}</code>"]
+    tech_head = ["<b>Подробности</b>", f"Тип: <code>{_esc_cut(group.exc_type or '?', 200)}</code>"]
     if group.message:
         tech_head.append(f"Сообщение: {_esc_cut(group.message, _MAX_MESSAGE)}")
-    foot_parts = []
-    if group.version:
-        foot_parts.append(f"версия {_esc_cut(group.version, 40)}")
+    foot_parts = [f"группа <code>{_esc(group.fingerprint[:12])}</code>"]
     if group.event_id is not None:
         foot_parts.append(f"событие #{group.event_id}")
-    foot_parts.append(f"группа <code>{_esc(group.fingerprint[:12])}</code>")
+    if group.version:
+        foot_parts.append(f"версия {_esc_cut(group.version, 40)}")
     footer = " · ".join(foot_parts)
 
     open_tag, close_tag = "<blockquote expandable>", "</blockquote>"
-    fixed = "\n".join([header, open_tag + "\n".join(tech_head), "Стек:", "", footer + close_tag])
-    budget = MAX_LEN - utf16_len(fixed) - 1
+    fixed = "\n".join([header, "", open_tag + "\n".join(tech_head), "Стек:", close_tag, "", footer])
+    budget = min(MAX_LEN - utf16_len(fixed) - 1, STACK_BUDGET)
     stack = _fit_stack(group.stack, budget)
 
     body = [*tech_head]
     if stack:
         body += ["Стек:", stack]
-    body.append(footer)
-    text = f"{header}\n{open_tag}" + "\n".join(body) + close_tag
+    text = f"{header}\n\n{open_tag}" + "\n".join(body) + f"{close_tag}\n\n{footer}"
     if utf16_len(text) > MAX_LEN:  # unreachable with the field caps above; keep the guarantee anyway
-        text = f"{header}\n{open_tag}" + "\n".join([*tech_head, footer]) + close_tag
+        text = f"{header}\n\n{open_tag}" + "\n".join(tech_head) + f"{close_tag}\n\n{footer}"
     return text

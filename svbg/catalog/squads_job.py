@@ -83,10 +83,12 @@ class NotifierProgress:
         self._notifier = notifier
 
     async def send(self, chat_id: int, text: str) -> int | None:
+        from svbg.tg.banner import banner_scope
         from svbg.tg.notifier import Priority
 
         try:
-            msg = await self._notifier.send(chat_id, text, priority=Priority.LOW)
+            with banner_scope("text"):  # edited as it goes and may grow: the banner as a link preview
+                msg = await self._notifier.send(chat_id, text, priority=Priority.LOW)
         except Exception as e:  # noqa: BLE001 - progress is best effort
             log.warning("squads job: progress message not sent: %s", type(e).__name__)
             return None

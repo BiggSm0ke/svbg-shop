@@ -24,15 +24,14 @@ import contextlib
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
-from html import escape
 from typing import TYPE_CHECKING, Any, Final, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import sqlalchemy as sa
 
 from svbg.core.bus import Event, EventBus
-from svbg.core.money import format_money
 from svbg.core.tables import users
+from svbg.tg.report import Inline, Report, code, money, plain
 
 if TYPE_CHECKING:
     from svbg.db.engine import Database
@@ -84,9 +83,9 @@ _METHODS: Final[Mapping[str, str]] = {
 
 
 class Poster(Protocol):
-    """``AdminChatService.post`` subset."""
+    """``AdminChatService.post_report`` subset."""
 
-    async def post(self, kind: str, text: str, *, html: bool = False) -> Any: ...
+    async def post_report(self, kind: str, report: Report) -> Any: ...
 
 
 #: ``instance_id`` → ``(title, method kind)`` of a payment instance (the payment core's registry).
@@ -95,9 +94,15 @@ InstanceInfo = Callable[[int], tuple[str, str | None] | None]
 
 def _money(amount: Any, currency: Any) -> str:
     try:
-        return format_money(int(amount), str(currency))
+        return money(int(amount), str(currency))
     except (TypeError, ValueError):
         return f"{amount} {currency}"
+
+
+def _card(title: str) -> Report:
+    """``"🆕 Новая подписка"`` → a card with that emoji and title."""
+    emoji, _, rest = title.partition(" ")
+    return Report(emoji, rest) if rest else Report("", title)
 
 
 def _int(value: Any) -> int | None:
@@ -157,10 +162,10 @@ class AdminEvents:
 
     # ------------------------------------------------------------------------------------------ helpers
 
-    async def _who(self, user_id: int | None) -> str:
-        """``Аня (@anya, id 123)`` — HTML-escaped; one SQL."""
+    async def _who(self, user_id: int | None) -> list[Inline]:
+        """``Аня (@anya, id 123)`` as inline parts (nothing to escape); one SQL."""
         if user_id is None:
-            return "пользователь ?"
+            return ["пользователь ?"]
         async with self._db.read() as conn:
             row = (
                 await conn.execute(
@@ -170,26 +175,29 @@ class AdminEvents:
                 )
             ).first()
         if row is None:
-            return f"пользователь #{user_id}"
-        name = escape((row.first_name or "").strip()[:64]) or "без имени"
-        parts = [f"@{escape(row.username[:64])}"] if row.username else []
-        parts.append(f"id <code>{row.telegram_id}</code>" if row.telegram_id else f"#{user_id}")
-        return f"{name} ({', '.join(parts)})"
+            return [f"пользователь #{user_id}"]
+        name = (row.first_name or "").strip()[:64] or "без имени"
+        out: list[Inline] = [name, " ("]
+        if row.username:
+            out.append(f"@{row.username[:64]}, ")
+        out += ["id ", code(row.telegram_id)] if row.telegram_id else [f"#{user_id}"]
+        out.append(")")
+        return out
 
     def _date(self, value: Any) -> str:
         if isinstance(value, str):
             try:
                 value = datetime.fromisoformat(value)
             except ValueError:
-                return escape(value[:32])
+                return value[:32]
         if not isinstance(value, datetime):
             return "—"
         with contextlib.suppress(ZoneInfoNotFoundError, ValueError):
             value = value.astimezone(ZoneInfo(self._timezone()))
         return value.strftime("%d.%m.%Y %H:%M")
 
-    async def _post(self, kind: str, text: str) -> None:
-        await self._poster.post(kind, text, html=True)
+    async def _post(self, kind: str, report: Report) -> None:
+        await self._poster.post_report(kind, report)
 
     # ------------------------------------------------------------------------------------------ handlers
 
@@ -198,46 +206,43 @@ class AdminEvents:
         if not self._group_ready():
             return
         try:
-            await self._post(K_NEW_USERS, f"👤 Новый пользователь: {await self._who(user_id)}")
+            # the name goes into the title: a digest of a burst quotes the first line of each card
+            await self._post(
+                K_NEW_USERS, Report("👤", f"Новый пользователь: {plain(await self._who(user_id))}")
+            )
         except Exception:  # isolation boundary
             log.exception("admin topic notification for a new user failed")
 
     async def _payment_paid(self, event: Event) -> None:
         p = event.payload
-        amount = _money(p.get("amount_minor"), p.get("currency"))
-        lines = [f"💰 <b>Пополнение {escape(amount)}</b>", f"👤 {await self._who(_int(p.get('user_id')))}"]
+        rep = Report("💰", f"Пополнение {_money(p.get('amount_minor'), p.get('currency'))}")
+        rep.line("Клиент", await self._who(_int(p.get("user_id"))))
         instance_id = _int(p.get("instance_id"))
         info = self._instance_info(instance_id) if self._instance_info and instance_id is not None else None
         if info is not None:
             title, method = info
             label = _METHODS.get(method or "", method or "")
-            lines.append(
-                f"Способ: {escape(label)} · {escape(title)}" if label else f"Способ: {escape(title)}"
-            )
-        lines.append(f"Платёж: <code>{escape(str(p.get('payment_id') or '?'))}</code>")
-        await self._post(K_PAYMENTS, "\n".join(lines))
+            rep.line("Способ", f"{label}, {title}" if label else title)
+        rep.line("Платёж", code(p.get("payment_id") or "?"))
+        await self._post(K_PAYMENTS, rep)
 
     async def _order_fulfilled(self, event: Event) -> None:
         p = event.payload
         kind = _ORDER_KINDS.get(str(p.get("kind")), str(p.get("kind")))
-        amount = _money(p.get("total_minor"), p.get("currency"))
-        text = (
-            f"🛒 <b>Оплата с баланса: {escape(kind)} — {escape(amount)}</b>\n"
-            f"👤 {await self._who(_int(p.get('user_id')))}\n"
-            f"Заказ №{_int(p.get('order_id')) or '?'}"
-        )
-        await self._post(K_PAYMENTS, text)
+        rep = Report("🛒", f"Оплата с баланса {_money(p.get('total_minor'), p.get('currency'))}")
+        rep.line("За что", kind)
+        rep.line("Клиент", await self._who(_int(p.get("user_id"))))
+        rep.line("Заказ", f"№{_int(p.get('order_id')) or '?'}")
+        await self._post(K_PAYMENTS, rep)
 
     async def _trial(self, event: Event) -> None:
         if not self._group_ready():
             return
         p = event.payload
         days = _int(p.get("days")) or 0
-        text = (
-            f"🎁 Триал на {days} дн.: {await self._who(_int(p.get('user_id')))}\n"
-            f"До {self._date(p.get('paid_until'))}"
-        )
-        await self._post(K_TRIALS, text)
+        who = plain(await self._who(_int(p.get("user_id"))))
+        rep = Report("🎁", f"Триал на {days} дн.: {who}").line("До", self._date(p.get("paid_until")))
+        await self._post(K_TRIALS, rep)
 
     async def _term_changed(self, event: Event) -> None:
         p = event.payload
@@ -245,15 +250,13 @@ class AdminEvents:
         title = _TERM_KINDS.get(kind)
         if title is None:
             return  # technical changes (imports, corrections) are not news for the topic
-        text = (
-            f"{title}: {await self._who(_int(p.get('user_id')))}\n"
-            f"Подписка до {self._date(p.get('new_paid_until'))}"
-        )
-        await self._post(K_SUBSCRIPTIONS, text)
+        rep = _card(title).line("Клиент", await self._who(_int(p.get("user_id"))))
+        rep.line("Подписка до", self._date(p.get("new_paid_until")))
+        await self._post(K_SUBSCRIPTIONS, rep)
 
     def _simple(self, title: str) -> Callable[[Event], Awaitable[None]]:
         async def handler(event: Event) -> None:
             user_id = _int(event.payload.get("user_id"))
-            await self._post(K_SUBSCRIPTIONS, f"{title}: {await self._who(user_id)}")
+            await self._post(K_SUBSCRIPTIONS, _card(title).line("Клиент", await self._who(user_id)))
 
         return handler

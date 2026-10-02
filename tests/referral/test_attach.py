@@ -160,3 +160,50 @@ async def _chats(env: Env) -> dict[int, list[str]]:
         assert mode == "HTML"
         out.setdefault(by_tg[chat], []).append(text)
     return out
+
+
+async def test_register_days_and_welcomes_wait_for_the_captcha(env: Env) -> None:
+    """A bot that opens a referral link but never passes the entry captcha brings its inviter nothing: no
+    «Новый друг», no days «за переход». The right tap releases both, once."""
+    referrer = await _referrer(env.db)
+    await add_sub(env.db, referrer)
+    env.cfg["REFERRAL_TRIGGER"] = "register"
+    env.cfg["CAPTCHA_ENABLED"] = True
+    bot = await add_user(env.db, first_name="Бот")
+    assert await env.svc.attach_referrer(bot, "abc123")
+    await env.drain()
+    assert env.sender.sent == [] and env.events == []
+    assert await env.db.raw("select 1 from referral_rewards where referred_user_id = $1", bot) == []
+    # the hourly catch-up sweep does not pay for it either
+    outcome = await env.svc.process_pair(bot)
+    assert not outcome.granted
+    assert await env.db.raw("select 1 from referral_rewards where referred_user_id = $1", bot) == []
+
+    await env.db.raw("update users set captcha_passed_at = now() where id = $1", bot)
+    assert await env.svc.captcha_passed(bot) is True
+    assert await env.svc.captcha_passed(bot) is True  # a repeat queues nothing new (one dedup key)
+    await env.drain()
+    by_chat = await _chats(env)
+    welcome, granted = by_chat[referrer]  # once each, despite the repeat
+    assert welcome.startswith("👥 Новый друг по вашей ссылке: Бот!") and granted.startswith("🎁 +14 дн.")
+    assert len(by_chat[bot]) == 1
+    rows = await env.db.raw(
+        "select side, status from referral_rewards where referred_user_id = $1 order by side", bot
+    )
+    assert [(r["side"], r["status"]) for r in rows] == [("invitee", "deferred"), ("inviter", "granted")]
+    assert await env.svc.captcha_passed(referrer) is False  # nobody invited the inviter
+
+
+async def test_staff_and_the_switched_off_captcha_do_not_hold_the_welcome(env: Env) -> None:
+    await _referrer(env.db)
+    env.cfg["CAPTCHA_ENABLED"] = False
+    newbie = await add_user(env.db, first_name="Боб")
+    assert await env.svc.attach_referrer(newbie, "abc123")
+    await env.drain()
+    assert len((await _chats(env))[newbie]) == 1
+    env.cfg["CAPTCHA_ENABLED"] = True
+    helper = await add_user(env.db, first_name="Саппорт")
+    await env.db.raw("update users set role = 'support' where id = $1", helper)  # staff never see it
+    assert await env.svc.attach_referrer(helper, "abc123")
+    await env.drain()
+    assert len((await _chats(env))[helper]) == 1

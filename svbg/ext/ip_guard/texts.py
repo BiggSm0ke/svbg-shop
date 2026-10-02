@@ -2,7 +2,9 @@
 renderers (05 §2.2.2).
 
 Cards are built **from database rows** (never from ``callback.message``): a restart or a second admin sees the
-same card. Every value that came from a user or the panel goes through :func:`esc`.
+same card. They are :class:`~svbg.tg.report.Report` objects (key-value lines, tables, folded top IPs): a rich
+message where the admin chat takes them, Telegram HTML otherwise. The report escapes its values itself; HTML
+written elsewhere (:func:`who`) goes in through :func:`~svbg.tg.report.from_html`.
 """
 
 from __future__ import annotations
@@ -12,6 +14,8 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Any, Final
 from zoneinfo import ZoneInfo
+
+from svbg.tg.report import Inline, Report, code, from_html
 
 __all__ = [
     "CLOSE_REASONS",
@@ -36,7 +40,6 @@ __all__ = [
 MSK: Final = ZoneInfo("Europe/Moscow")
 DASH: Final = "—"
 MAX_TOP_LINES: Final = 15
-MAIN_LIMIT: Final = 3900
 
 #: «🗑 Закрыть блок» zeroes the paid term: the admin picks one of these (``admin_audit.reason``). Buttons, not
 #: free text: the card lives in the admin group, where a text form would catch other people's messages.
@@ -71,54 +74,70 @@ T: Final[Mapping[str, str]] = {
     "reason_auto": "авто",
     "reason_manual": "вручную",
     "reason_anomaly": "из аномалии",
-    "block_title": "🚨 <b>Подписка заблокирована</b> · {reason}",
-    "metrics": "IP за {window} мин: <b>{w}</b> · подсетей {s} · живых {l}",
-    "thresholds": "Пороги: предупреждение {warn}, блок {block}, подсетей ≥{subnets}, живых ≥{live}",
-    "frozen": "❄️ Заморожено: {left}",
-    "actions": "🛡 <b>Действия</b>",
-    "act_bot": "• Бот: ✅ подписка заморожена",
-    "act_panel_ok": "• Панель: ✅ отключена",
-    "act_panel_wait": "• Панель: ⏳ отключаю (повторяю, пока не выйдет)",
-    "act_drop_ok": "• Соединения: разорваны на {n} нодах",
-    "act_drop_wait": "• Соединения: ⏳ разрываю",
-    "act_drop_failed": "• Соединения: ⚠️ не разорваны (нет прав connections:drop)",
-    "act_drop_none": "• Соединения: нечего разрывать",
-    "act_residual": "• ⚠️ Остались соединения: UDP/QUIC, нет CAP_NET_ADMIN у ноды или долгий mux",
-    "act_notify": "• Пользователь: {state}",
+    "block_title": "Подписка заблокирована",
+    "block_reason": "блок: {reason}",
+    "k_who": "Кто",
+    "k_sub": "Подписка",
+    "k_ips": "IP за {window} мин",
+    "k_subnets": "Подсетей",
+    "k_live": "Живых IP",
+    "k_frozen": "❄️ Заморожено",
+    "thresholds": "Пороги: предупреждение {warn}, блок {block}, подсетей от {subnets}, живых от {live}",
+    "actions": "🛡 Действия",
+    "k_bot": "Бот",
+    "k_panel": "Панель",
+    "k_drop": "Соединения",
+    "k_notify": "Пользователь",
+    "act_bot": "✅ подписка заморожена",
+    "act_panel_ok": "✅ отключена",
+    "act_panel_wait": "⏳ отключаю (повторяю, пока не выйдет)",
+    "act_drop_ok": "✅ разорваны на {n} нодах",
+    "act_drop_wait": "⏳ разрываю",
+    "act_drop_failed": "⚠️ не разорваны (нет прав connections:drop)",
+    "act_drop_none": "нечего разрывать",
+    "act_residual": "⚠️ Остались соединения: UDP/QUIC, нет CAP_NET_ADMIN у ноды или долгий mux",
     "notify_sent": "✅ уведомлён",
     "notify_unreachable": "⚠️ бот заблокирован или нет диалога",
     "notify_failed": "⚠️ не удалось отправить",
     "notify_off": "уведомления выключены",
     "notify_wait": "⏳",
-    "unblocked": "🔓 <b>Разблокирована</b> ({by}, {at}): {outcome}",
+    "unblocked": "🔓 Разблокирована",
     "unblocked_revoke": " + новая ссылка",
     "outcome_active": "возвращено {left}, активна до {until}",
     "outcome_expired": "срок закончился, пользователь продлит сам",
     "outcome_zeroed": "подписка была обнулена",
     "outcome_gone": "подписки больше нет",
-    "closed": "🗑 <b>Блок закрыт</b> ({by}, {at}): подписка обнулена, аккаунт отключён",
-    "confirmed": "✅ Проверено: {by}",
+    "closed": "🗑 Блок закрыт",
+    "closed_what": "подписка обнулена, аккаунт отключён",
+    "k_by": "Кто решил",
+    "k_when": "Когда",
+    "k_outcome": "Итог",
+    "confirmed": "✅ Проверено",
     "bypass": (
         "🚨 Включили в обход кнопки, поэтому отключил снова. Снимайте блок кнопкой, иначе дни не вернутся."
     ),
-    "warn_title": "⚠️ <b>Подозрение на слив</b>",
-    "nb_title": "ℹ️ <b>Не блокирую:</b> {why}",
-    "failed_title": "🚨 <b>Автоблок НЕ выполнен:</b> {why}",
-    "acked": "✅ Проверено ({by})",
-    "top_title": "Самые активные IP:",
+    "warn_title": "Подозрение на слив",
+    "nb_title": "Не блокирую",
+    "failed_title": "Автоблок НЕ выполнен",
+    "k_why": "Почему",
+    "acked": "✅ Проверено",
+    "top_title": "Самые активные IP",
     "top_more": "…и ещё {n}",
-    "anomaly_title": "🛑 <b>Автоблоки остановлены</b>",
-    "anomaly_reason": "Причина: {why}",
+    "anomaly_title": "Автоблоки остановлены",
+    "k_trigger": "Причина",
     "anomaly_until": "Карантин до {at} МСК. Пока он идёт, никого не блокирую.",
     "anomaly_over": "Карантин закончился.",
-    "anomaly_members": "Участники ({n}):",
-    "anomaly_member": "• {who} — {w} IP · {state}",
+    "anomaly_members": "Участники: {n}",
+    "col_who": "Кто",
+    "col_ip": "IP",
+    "col_state": "Статус",
+    "col_sub": "Подписка",
+    "col_why": "Почему",
     "member_pending": "ждёт решения",
     "member_blocked": "🚫 заблокирован",
     "member_dismissed": "✅ ложная тревога",
     "member_skipped": "пропущен",
-    "digest_title": "🧾 <b>Ещё {n} предупреждений за проход</b>",
-    "digest_line": "• №{sid} — {w} IP · {kind}",
+    "digest_title": "Ещё {n} предупреждений за проход",
     # buttons
     "b_unblock": "🔓 Разблокировать",
     "b_unblock_plain": "Разблокировать",
@@ -249,41 +268,40 @@ def who(row: Mapping[str, Any]) -> str:
     return f"{name} ({handle}{ident})"
 
 
-def _top_lines(evidence: Mapping[str, Any], names: Mapping[str, str]) -> list[str]:
+def _cut(value: Any, limit: int = 64) -> str:
+    """Like :func:`esc` without the escaping (a report escapes its values itself)."""
+    if value is None or value == "":
+        return DASH
+    text = str(value)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _top_lines(evidence: Mapping[str, Any], names: Mapping[str, str]) -> list[Inline]:
     top = evidence.get("top") if isinstance(evidence, Mapping) else None
     if not isinstance(top, list) or not top:
         return []
-    lines = [T["top_title"]]
+    lines: list[Inline] = []
     for item in top[:MAX_TOP_LINES]:
         if not isinstance(item, Mapping):
             continue
-        nodes = ", ".join(esc(names.get(str(n), str(n)[:8]), 24) for n in item.get("nodes") or [])
-        lines.append(f"<code>{esc(item.get('key'), 64)}</code> — {nodes or DASH}")
+        nodes = ", ".join(_cut(names.get(str(n), str(n)[:8]), 24) for n in item.get("nodes") or [])
+        lines.append([code(_cut(item.get("key"), 64)), f" — {nodes or DASH}"])
     rest = int(evidence.get("total") or len(top)) - min(len(top), MAX_TOP_LINES)
     if rest > 0:
         lines.append(T["top_more"].format(n=rest))
     return lines
 
 
-def _quote(lines: Sequence[str]) -> str:
-    return "<blockquote expandable>" + "\n".join(lines) + "</blockquote>" if lines else ""
-
-
-def _clip(text: str) -> str:
-    return text if len(text) <= MAIN_LIMIT else text[: MAIN_LIMIT - 1] + "…"
-
-
-def _metrics(m: Mapping[str, Any], window: int) -> str:
-    return T["metrics"].format(
-        window=window,
-        w=int(m.get("ip_count") or 0),
-        s=int(m.get("subnet_count") or 0),
-        l=int(m.get("live_ip_count") or 0),
+def _metrics(rep: Report, m: Mapping[str, Any], window: int) -> Report:
+    return (
+        rep.line(T["k_ips"].format(window=window), str(int(m.get("ip_count") or 0)))
+        .line(T["k_subnets"], str(int(m.get("subnet_count") or 0)))
+        .line(T["k_live"], str(int(m.get("live_ip_count") or 0)))
     )
 
 
 def _by(name: str | None) -> str:
-    return esc(name) if name else "система"
+    return _cut(name) if name else "система"
 
 
 def block_card(
@@ -295,41 +313,44 @@ def block_card(
     panel_disabled: bool,
     by_names: Mapping[str, str | None],
     node_names: Mapping[str, str] = {},
-) -> str:
-    """The block card: header, numbers, the live «🛡 Действия» block, the outcome and the top IPs."""
+) -> Report:
+    """The block card: header, numbers, the live «🛡 Действия» block, the outcome and the top IPs.
+
+    ``person``: Telegram HTML (:func:`who`)."""
     reason = T.get(f"reason_{block['reason']}", str(block["reason"]))
-    lines = [
-        T["block_title"].format(reason=reason),
-        f"👤 {person} · подписка №{int(block['subscription_id'])}",
-        _metrics(block, window),
-    ]
+    rep = Report("🚨", T["block_title"], subtitle=T["block_reason"].format(reason=reason))
+    rep.line(T["k_who"], from_html(person)).line(T["k_sub"], f"№{int(block['subscription_id'])}")
+    _metrics(rep, block, window)
     status = block["status"]
     events = [e for e in block.get("events") or [] if isinstance(e, Mapping)]
     kinds = [str(e.get("kind")) for e in events]
     if status == "active":
-        lines.append(T["frozen"].format(left=fmt_duration(frozen_left)))
-        lines += ["", T["actions"], T["act_bot"]]
-        lines.append(T["act_panel_ok"] if panel_disabled else T["act_panel_wait"])
+        rep.line(T["k_frozen"], fmt_duration(frozen_left))
+        rep.section(T["actions"]).line(T["k_bot"], T["act_bot"])
+        rep.line(T["k_panel"], T["act_panel_ok"] if panel_disabled else T["act_panel_wait"])
         drop = next(
             (e for e in reversed(events) if e.get("kind") in ("dropped", "drop_failed", "drop_none")), None
         )
         if drop is None:
-            lines.append(T["act_drop_wait"])
+            dropped = T["act_drop_wait"]
         elif drop.get("kind") == "dropped":
-            lines.append(T["act_drop_ok"].format(n=int(drop.get("nodes") or 0)))
+            dropped = T["act_drop_ok"].format(n=int(drop.get("nodes") or 0))
         elif drop.get("kind") == "drop_none":
-            lines.append(T["act_drop_none"])
+            dropped = T["act_drop_none"]
         else:
-            lines.append(T["act_drop_failed"])
-        if "residual" in kinds:
-            lines.append(T["act_residual"])
+            dropped = T["act_drop_failed"]
+        rep.line(T["k_drop"], dropped)
         notify = next((e for e in reversed(events) if e.get("kind") == "notify"), None)
         state = T.get(f"notify_{notify.get('state')}", T["notify_wait"]) if notify else T["notify_wait"]
-        lines.append(T["act_notify"].format(state=state))
-        if "bypass" in kinds:
-            lines.append(T["bypass"])
+        rep.line(T["k_notify"], state)
+        rep.bullets(
+            [
+                T["act_residual"] if "residual" in kinds else "",
+                T["bypass"] if "bypass" in kinds else "",
+            ]
+        )
         if block.get("confirmed_at") is not None:
-            lines.append(T["confirmed"].format(by=_by(by_names.get("confirmed"))))
+            rep.line(T["confirmed"], _by(by_names.get("confirmed")))
     elif status == "unblocked":
         outcome = str(block.get("outcome") or "active")
         if outcome == "active":
@@ -341,15 +362,15 @@ def block_card(
             text = T.get(f"outcome_{outcome}", outcome)
         if block.get("unblock_mode") == "revoke":
             text += T["unblocked_revoke"]
-        lines.append(
-            T["unblocked"].format(
-                by=_by(by_names.get("unblocked")), at=fmt_dt(block.get("unblocked_at")), outcome=text
-            )
-        )
+        rep.section(T["unblocked"])
+        rep.line(T["k_by"], _by(by_names.get("unblocked")))
+        rep.line(T["k_when"], fmt_dt(block.get("unblocked_at")))
+        rep.line(T["k_outcome"], text)
     else:
-        lines.append(T["closed"].format(by=_by(by_names.get("closed")), at=fmt_dt(block.get("closed_at"))))
-    quote = _quote(_top_lines(block.get("evidence") or {}, node_names))
-    return _clip("\n".join(lines) + ("\n" + quote if quote else ""))
+        rep.section(T["closed"])
+        rep.line(T["k_by"], _by(by_names.get("closed"))).line(T["k_when"], fmt_dt(block.get("closed_at")))
+        rep.line(T["k_outcome"], T["closed_what"])
+    return rep.details(T["top_title"], _top_lines(block.get("evidence") or {}, node_names))
 
 
 def _kind_why(alert: Mapping[str, Any]) -> str:
@@ -358,9 +379,9 @@ def _kind_why(alert: Mapping[str, Any]) -> str:
     template = KIND_TITLES.get(reason, reason or DASH)
     return template.format(
         left=int(m.get("sustained_left") or 1),
-        nodes=", ".join(esc(n, 24) for n in m.get("missing_nodes") or []) or DASH,
+        nodes=", ".join(_cut(n, 24) for n in m.get("missing_nodes") or []) or DASH,
         until=fmt_time(_parse(m.get("until"))),
-        why=esc(m.get("precondition") or "автоблок выключен", 120),
+        why=_cut(m.get("precondition") or "автоблок выключен", 120),
     )
 
 
@@ -383,26 +404,25 @@ def warning_card(
     thresholds: Mapping[str, int],
     acked_by: str | None,
     node_names: Mapping[str, str] = {},
-) -> str:
+) -> Report:
+    """A warning, a «не блокирую» note or a failed autoblock. ``person``: Telegram HTML or plain text."""
     kind = alert["kind"]
     m = alert.get("metrics") or {}
     if kind == "warn":
-        title = T["warn_title"]
+        rep = Report("⚠️", T["warn_title"])
     elif kind == "block_failed":
-        title = T["failed_title"].format(why=esc(m.get("fail_reason") or "ошибка", 160))
+        rep = Report("🚨", T["failed_title"]).line(T["k_why"], _cut(m.get("fail_reason") or "ошибка", 160))
     else:
-        title = T["nb_title"].format(why=_kind_why(alert))
+        rep = Report("ℹ️", T["nb_title"]).line(T["k_why"], _kind_why(alert))
     sub = alert.get("subscription_id")
-    lines = [
-        title,
-        f"👤 {person}" + (f" · подписка №{int(sub)}" if sub is not None else ""),
-        _metrics(m, window),
-        T["thresholds"].format(**thresholds),
-    ]
+    rep.line(T["k_who"], from_html(person))
+    if sub is not None:
+        rep.line(T["k_sub"], f"№{int(sub)}")
+    _metrics(rep, m, window)
+    rep.note(T["thresholds"].format(**thresholds))
     if alert.get("acked_at") is not None:
-        lines.append(T["acked"].format(by=_by(acked_by)))
-    quote = _quote(_top_lines(alert.get("evidence") or {}, node_names))
-    return _clip("\n".join(lines) + ("\n" + quote if quote else ""))
+        rep.line(T["acked"], _by(acked_by))
+    return rep.details(T["top_title"], _top_lines(alert.get("evidence") or {}, node_names))
 
 
 def anomaly_card(
@@ -411,7 +431,8 @@ def anomaly_card(
     now: datetime,
     people: Mapping[str, str],
     params: Mapping[str, int],
-) -> str:
+) -> Report:
+    """The quarantine card: why, until when, and the members as a table. ``people``: Telegram HTML."""
     m = alert.get("metrics") or {}
     trigger = str(m.get("trigger") or "per_run")
     why = TRIGGERS.get(trigger, trigger).format(
@@ -422,40 +443,36 @@ def anomaly_card(
         max_hour=params.get("max_hour", 10),
     )
     until = alert.get("quarantine_until")
-    lines = [T["anomaly_title"], T["anomaly_reason"].format(why=why)]
-    lines.append(
-        T["anomaly_until"].format(at=fmt_time(until)) if until and until > now else T["anomaly_over"]
-    )
+    rep = Report("🛑", T["anomaly_title"]).line(T["k_trigger"], why)
+    rep.text(T["anomaly_until"].format(at=fmt_time(until)) if until and until > now else T["anomaly_over"])
     members = alert.get("members") or {}
-    lines += ["", T["anomaly_members"].format(n=len(members))]
-    for pid, info in sorted(members.items(), key=lambda kv: -int((kv[1] or {}).get("ip") or 0))[:30]:
+    rows: list[list[Inline]] = []
+    for pid, info in sorted(members.items(), key=lambda kv: -int((kv[1] or {}).get("ip") or 0)):
         state = T.get(f"member_{(info or {}).get('state')}", T["member_pending"])
-        lines.append(
-            T["anomaly_member"].format(
-                who=people.get(str(pid), f"панель {esc(pid)}"),
-                w=int((info or {}).get("ip") or 0),
-                state=state,
-            )
+        person = people.get(str(pid))
+        rows.append(
+            [
+                from_html(person) if person else f"панель {_cut(pid)}",
+                str(int((info or {}).get("ip") or 0)),
+                state,
+            ]
         )
-    if len(members) > 30:
-        lines.append(T["top_more"].format(n=len(members) - 30))
-    return _clip("\n".join(lines))
+    rep.section(T["anomaly_members"].format(n=len(members)))
+    return rep.table([T["col_who"], T["col_ip"], T["col_state"]], rows, "lrl", max_rows=30)
 
 
-def digest_card(alert: Mapping[str, Any]) -> str:
+def digest_card(alert: Mapping[str, Any]) -> Report:
+    """Warnings of one pass that did not get a card of their own, as a table."""
     members = alert.get("members") or {}
-    lines = [T["digest_title"].format(n=len(members))]
-    for _pid, raw in list(members.items())[:40]:
+    rows: list[list[Inline]] = []
+    for _pid, raw in list(members.items()):
         info = raw or {}
         kind = KIND_TITLES.get(str(info.get("kind")), str(info.get("kind")))
         if "{" in kind:
             kind = str(info.get("kind"))
-        lines.append(
-            T["digest_line"].format(
-                sid=int(info.get("sub") or 0), w=int(info.get("ip") or 0), kind=esc(kind, 80)
-            )
-        )
-    return _clip("\n".join(lines))
+        rows.append([f"№{int(info.get('sub') or 0)}", str(int(info.get("ip") or 0)), _cut(kind, 80)])
+    rep = Report("🧾", T["digest_title"].format(n=len(members)))
+    return rep.table([T["col_sub"], T["col_ip"], T["col_why"]], rows, "lrl", max_rows=40, shrink=2)
 
 
 def unblock_user_text(

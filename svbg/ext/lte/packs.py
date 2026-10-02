@@ -656,11 +656,11 @@ async def _topup_card(
     cfg = service.cfg()
     if not cfg.card_topups:
         return
-    text = CARD_T["topup"].format(sid=sid, gb=fmt_gb(value, cfg.gb_bytes))
+    gb = fmt_gb(value, cfg.gb_bytes)
     await enqueue(
         conn,
         CARD_KIND,
-        {"text": text},
+        {"card": "topup", "sid": sid, "gb": gb, "text": CARD_T["topup"].format(sid=sid, gb=gb)},
         queue="notify",
         lane="background",
         dedup_key=f"lte.card:order:{order_id}",

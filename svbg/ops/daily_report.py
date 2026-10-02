@@ -17,7 +17,6 @@ next ticks (≤ ``MAX_ATTEMPTS``), the last failure raises the «Требует 
 from __future__ import annotations
 
 import contextlib
-import html
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -28,10 +27,10 @@ import sqlalchemy as sa
 
 from svbg.core import clock
 from svbg.core.errors.report import format_duration_ru
-from svbg.core.money import format_money
 from svbg.ops.settings import opt
 from svbg.ops.state import K_REPORT, MetaState
 from svbg.ops.timing import day_window, due_today, today_window, zone_of
+from svbg.tg.report import Report, b, money, num
 
 if TYPE_CHECKING:
     from svbg.db.engine import Database
@@ -43,6 +42,7 @@ __all__ = [
     "DailyReport",
     "ReportData",
     "RevenueLine",
+    "build_report",
     "collect",
     "render",
 ]
@@ -60,8 +60,8 @@ ATTENTION_KEY: Final = "ops:report"
 #: Audited hand-outs without an amount that the owner must still see (04 §9.1 / stage-3 detection channel).
 GIFT_ACTIONS: Final = ("subs.grant", "subs.give_plan", "lte.add_gb", "promo.create")
 
-#: ``post(text, buttons)`` into the reports topic; ``reply(chat_id, text, buttons)`` into a private chat.
-Post = Callable[[str, Sequence[Sequence[Any]] | None], Awaitable[Any]]
+#: ``post(report, buttons)`` into the reports topic.
+Post = Callable[[Report, Sequence[Sequence[Any]] | None], Awaitable[Any]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,10 +211,7 @@ async def collect(db: Database, start: datetime, end: datetime, day: date, *, pa
 
 
 def _money(amount: int, currency: str) -> str:
-    try:
-        return format_money(amount, currency, nbsp=True)
-    except ValueError:
-        return f"{amount} {currency}"
+    return money(amount, currency)
 
 
 def _signed(amount: int, currency: str) -> str:
@@ -223,13 +220,13 @@ def _signed(amount: int, currency: str) -> str:
 
 
 def _signed_int(value: int, unit: str) -> str:
-    return ("+" if value > 0 else "−" if value < 0 else "±") + f"{abs(value)}\N{NO-BREAK SPACE}{unit}"
+    return ("+" if value > 0 else "−" if value < 0 else "±") + f"{num(abs(value))}\N{NO-BREAK SPACE}{unit}"
 
 
-def _admin_line(a: AdminMoney, currency: str) -> str:
-    money = a.count if a.money_count is None else a.money_count
+def _admin_result(a: AdminMoney, currency: str) -> str:
+    money_rows = a.count if a.money_count is None else a.money_count
     parts: list[str] = []
-    if money:
+    if money_rows:
         parts.append(_signed(a.net_minor, currency))
     if a.day_actions:
         parts.append(_signed_int(a.days, "дн."))
@@ -237,52 +234,68 @@ def _admin_line(a: AdminMoney, currency: str) -> str:
         parts.append(_signed_int(a.gb, "ГБ"))
     if a.promos:
         parts.append(f"промокодов {a.promos}")
-    return f"   {html.escape(a.who)} — {a.count}" + "".join(f" · {html.escape(p)}" for p in parts)
+    return " · ".join(parts) or "—"
 
 
-def render(data: ReportData, *, currency: str, tz_name: str) -> str:
-    """Telegram HTML; every dynamic piece is escaped."""
-    e = html.escape
+def build_report(data: ReportData, *, currency: str, tz_name: str) -> Report:
+    """The report card: key numbers, then revenue per kassa and hand-outs per admin as tables."""
     when = f"{data.day.day} {_MONTHS[data.day.month - 1]}"
     if data.partial:
-        title = f"📊 <b>Отчёт за сегодня, {when}</b> (до {data.end.astimezone(zone_of(tz_name)):%H:%M})"
+        until = data.end.astimezone(zone_of(tz_name))
+        rep = Report("📊", f"Отчёт за сегодня, {when}").footer(f"данные до {until:%H:%M}, {tz_name}")
     else:
-        title = f"📊 <b>Отчёт за {when}</b>"
-    lines = [title, f"<i>{e(tz_name)}</i>", ""]
+        rep = Report("📊", f"Отчёт за {when}").footer(f"по времени {tz_name}")
     totals: dict[str, int] = {}
     payments = 0
     for line in data.revenue:
         totals[line.currency] = totals.get(line.currency, 0) + line.amount_minor
         payments += line.count
     if totals:
-        total = " + ".join(_money(v, c) for c, v in totals.items())
-        lines.append(f"💰 Выручка: <b>{e(total)}</b> · оплат: {payments}")
-        for line in data.revenue[:_MAX_LINES]:
-            lines.append(f"   {e(line.title)} — {e(_money(line.amount_minor, line.currency))} · {line.count}")
-        if len(data.revenue) > _MAX_LINES:
-            lines.append(f"   … и ещё {len(data.revenue) - _MAX_LINES}")
+        rep.line("Выручка", " + ".join(_money(v, c) for c, v in totals.items()))
+        rep.line("Оплат", num(payments))
     else:
-        lines.append("💰 Выручка: оплат не было")
+        rep.line("Выручка", "оплат не было")
     purchases = data.purchases_new + data.purchases_renew + data.purchases_other
     detail = f"новых {data.purchases_new}, продлений {data.purchases_renew}"
     if data.purchases_other:
         detail += f", других {data.purchases_other}"
-    lines.append(f"🛒 Покупок: {purchases}" + (f" ({detail})" if purchases else ""))
-    lines.append(f"👤 Новых пользователей: {data.new_users}")
-    lines.append(f"🎁 Триалов: {data.trials} · купили после триала: {data.after_trial}")
-    lines.append(f"📦 Активных подписок: {data.active_subs}")
+    rep.line("Покупок", [b(num(purchases)), f" ({detail})"] if purchases else "0")
+    rep.line("Новых пользователей", num(data.new_users))
+    rep.line("Триалов", [b(num(data.trials)), f", купили после триала {num(data.after_trial)}"])
+    rep.line("Активных подписок", num(data.active_subs))
     if data.tickets_opened or data.tickets_answered:
-        reply = ""
+        rep.line("Обращений", [b(num(data.tickets_opened)), f", с ответом {num(data.tickets_answered)}"])
         if data.first_reply_s is not None:
-            reply = f" · первый ответ (медиана): {format_duration_ru(timedelta(seconds=data.first_reply_s))}"
-        lines.append(f"🎫 Обращений: {data.tickets_opened} · с ответом: {data.tickets_answered}{reply}")
+            rep.line("Первый ответ", format_duration_ru(timedelta(seconds=data.first_reply_s)))
+    if data.revenue:
+        total = None
+        if len(totals) == 1 and len(data.revenue) > 1:
+            ((cur, amount),) = totals.items()
+            total = ["Итого", num(payments), _money(amount, cur)]
+        rep.section("По кассам").table(
+            ["Касса", "Оплат", "Сумма"],
+            [
+                [line.title, num(line.count), _money(line.amount_minor, line.currency)]
+                for line in data.revenue
+            ],
+            "lrr",
+            total=total,
+            max_rows=_MAX_LINES,
+        )
     if data.admin_money:
         actions = sum(a.count for a in data.admin_money)
-        lines += ["", f"🛠 Вручную (админы): {actions}"]
-        lines += [_admin_line(a, currency) for a in data.admin_money[:_MAX_LINES]]
-        if len(data.admin_money) > _MAX_LINES:
-            lines.append(f"   … и ещё {len(data.admin_money) - _MAX_LINES}")
-    return "\n".join(lines)
+        rep.section(f"Выдано вручную: {num(actions)}").table(
+            ["Админ", "Шт", "Итог"],
+            [[a.who, num(a.count), _admin_result(a, currency)] for a in data.admin_money],
+            "lrl",
+            max_rows=_MAX_LINES,
+        )
+    return rep
+
+
+def render(data: ReportData, *, currency: str, tz_name: str) -> str:
+    """The report as Telegram HTML (where rich messages are not available); dynamic pieces are escaped."""
+    return build_report(data, currency=currency, tz_name=tz_name).html()
 
 
 class DailyReport:
@@ -311,14 +324,14 @@ class DailyReport:
         self._last_day: str | None = None
         self._fails: tuple[str, int] = ("", 0)  # (day, failed attempts) of the report being delivered
 
-    async def build(self, *, partial: bool, now: datetime | None = None) -> str:
+    async def build(self, *, partial: bool, now: datetime | None = None) -> Report:
         snap = self._settings()
         tz_name = str(opt(snap, "TIMEZONE"))
         zone = zone_of(tz_name)
         now = now or clock.now()
         start, end, day = today_window(now, zone) if partial else day_window(now, zone)
         data = await collect(self._db, start, end, day, partial=partial)
-        return render(data, currency=str(opt(snap, "CURRENCY")), tz_name=tz_name)
+        return build_report(data, currency=str(opt(snap, "CURRENCY")), tz_name=tz_name)
 
     async def tick(self) -> bool:
         """Send yesterday's report when it is due; ``True`` if sent. ~0 SQL on the minutes in between."""
@@ -349,8 +362,8 @@ class DailyReport:
                 await self._alert(due.day, failed, "время отправки прошло")
             return False
         try:
-            text = await self.build(partial=False, now=now)
-            await self._post(text, self._buttons())
+            report = await self.build(partial=False, now=now)
+            await self._post(report, self._buttons())
         except Exception as exc:
             failed += 1
             self._fails = (due.day, failed)

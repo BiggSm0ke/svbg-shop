@@ -148,6 +148,10 @@ async def test_card_states(env: UEnv) -> None:
     await env.click(ADMIN, encode(SCREEN_CARD, arg=str(uid)))
     assert "⛔️ Заблокирован" in env.text and "Заблокировал(а) бота" in env.text
     assert "✅ Разблокировать" in env.labels()
+    assert "Капчу ещё не прошёл(а)" in env.text  # a new user stuck at the entry captcha
+    await env.db.raw("update users set captcha_passed_at = now() where id = $1", uid)
+    await env.click(ADMIN, encode(SCREEN_CARD, arg=str(uid)))
+    assert "Капчу" not in env.text
 
 
 async def test_payments_history_paginates_and_masks_sums_for_support(env: UEnv) -> None:

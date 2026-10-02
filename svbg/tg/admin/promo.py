@@ -35,11 +35,11 @@ from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, Message
 
-from svbg.content.defaults import HOME
 from svbg.core.clock import now
 from svbg.core.money import format_money, parse_money
 from svbg.promo.rules import KIND_TITLES, KINDS, MAX_USES, VALUE_KINDS, Promo, PromoError, check_code
 from svbg.promo.service import Actor, PromoService
+from svbg.tg.admin import nav
 from svbg.tg.ui.forms import Field, Form, ValidationError, integer
 from svbg.tg.ui.forms import text as text_validator
 from svbg.tg.ui.renderer import nav_button
@@ -94,7 +94,6 @@ _T: Final[dict[str, str]] = {
     "list_hint": "Нажмите на промокод, чтобы изменить его.",
     "new": "➕ Новый промокод",
     "find": "🔎 Найти по коду",
-    "menu": "🏠 Меню",
     "prev": "◀️",
     "next": "▶️",
     "to_list": "⬅️ К промокодам",
@@ -407,7 +406,7 @@ class PromoAdminScreens:
         if pager:
             rows.append(pager)
         rows.append([nav_button(_T["new"], SCREEN_KINDS), nav_button(_T["find"], ACTIONS, "find")])
-        rows.append([nav_button(_T["menu"], HOME)])
+        rows.append(nav.back_row(SCREEN_LIST))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     async def _a_find(self, ctx: ScreenCtx, _arg: Any) -> View:

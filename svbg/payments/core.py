@@ -74,6 +74,7 @@ from svbg.sdk.payments import (
     WebhookResponse,
 )
 from svbg.services.roles import Actor, load_actor
+from svbg.tg.report import Report, code
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncConnection
@@ -142,16 +143,9 @@ _T: Final = {
         "Платёжка «{title}», платёж {pid}: счёт на {expected}, пришло {got}. "
         "Деньги не зачислены — проверьте оплату в кабинете кассы и решите вручную."
     ),
-    "mismatch_admin": (
-        "⚠️ <b>Сумма оплаты не совпала</b>\nСчёт: {expected}\nПришло: {got}\n"
-        "Платёжка: {title}\nПлатёж: <code>{pid}</code>\nДеньги не зачислены."
-    ),
     "refund_title": "Возврат или чарджбэк по оплате",
     "refund_body": (
         "Платёжка «{title}», платёж {pid} на {amount}: касса сообщила «{state}». Проверьте баланс."
-    ),
-    "refund_admin": (
-        "↩️ <b>Возврат / чарджбэк</b>\nПлатёжка: {title}\nПлатёж: <code>{pid}</code>\nСумма: {amount}"
     ),
     "unknown_title": "Оплата по неизвестному счёту",
     "unknown_body": (
@@ -300,9 +294,9 @@ SpendGuard = Callable[["AsyncConnection", int], Awaitable[str | None]]
 
 
 class AdminPoster(Protocol):
-    """``AdminChatService.post`` subset used for payment alerts (topic ``payments``)."""
+    """``AdminChatService.post_report`` subset used for payment alerts (topic ``payments``)."""
 
-    async def post(self, kind: str, text: str, *, html: bool = False) -> Any: ...
+    async def post_report(self, kind: str, report: Report) -> Any: ...
 
 
 class PresenceHook(Protocol):
@@ -1021,7 +1015,12 @@ class PaymentCore:
                 "error",
                 _T["mismatch_title"],
                 _T["mismatch_body"].format(**fmt, got=got),
-                _T["mismatch_admin"].format(**fmt, got=got),
+                Report("⚠️", "Сумма оплаты не совпала")
+                .line("Счёт", fmt["expected"])
+                .line("Пришло", got)
+                .line("Платёжка", inst.title)
+                .line("Платёж", code(pay.id))
+                .note("Деньги не зачислены."),
             )
         elif result.refunded and pay is not None:
             fmt = {"title": inst.title, "pid": pay.id, "amount": _money(pay.paid_amount_minor, pay.currency)}
@@ -1030,7 +1029,10 @@ class PaymentCore:
                 "error",
                 _T["refund_title"],
                 _T["refund_body"].format(**fmt, state=result.reason or "refunded"),
-                _T["refund_admin"].format(**fmt),
+                Report("↩️", "Возврат или чарджбэк")
+                .line("Платёжка", inst.title)
+                .line("Платёж", code(pay.id))
+                .line("Сумма", fmt["amount"]),
             )
         elif (
             result.outcome is Outcome.UNKNOWN_PAYMENT
@@ -1047,11 +1049,11 @@ class PaymentCore:
                 None,
             )
 
-    def _alert(self, key: str, severity: str, title: str, body: str, admin_html: str | None) -> None:
+    def _alert(self, key: str, severity: str, title: str, body: str, admin: Report | None) -> None:
         if self._attention is not None:
             self._spawn(self._attention.raise_item(key, severity, title, body))  # type: ignore[arg-type]
-        if self._admin_chat is not None and admin_html is not None:
-            self._spawn(self._admin_chat.post("payments", admin_html, html=True))
+        if self._admin_chat is not None and admin is not None:
+            self._spawn(self._admin_chat.post_report("payments", admin))
 
     async def drain(self, timeout: float = 5.0) -> None:  # noqa: ASYNC109 - graceful deadline
         """Wait for background notifications (shutdown, tests)."""

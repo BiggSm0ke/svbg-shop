@@ -383,7 +383,8 @@ _MANUAL_GATES: Final = (
     "§1.4 п.5: владелец ответил на вопросы §6 с пометкой «блокирует»",
     "§4.1 п.9: хвосты Bedolaga дожаты (IP Guard, wlq_commands/backfill pending, Pay held, подарки)",
     # Site payment is dropped (stage-4b contract): payments.db is NOT imported, the bot does not know tc_….
-    "§4.5: сервис оплаты со страницы подписки (если был) остановлен вместе с Bedolaga; в payments.db нет открытых tc_ (created ≤ 48 ч, held, "
+    "§4.5: сервис оплаты со страницы подписки (если был) остановлен вместе с Bedolaga; "
+    "в payments.db нет открытых tc_ (created ≤ 48 ч, held, "
     "paid_extend_failed) — закрыты вручную; поздний вебхук по tc_ бот не зачислит (UNKNOWN_PAYMENT)",
 )
 

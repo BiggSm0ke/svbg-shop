@@ -73,10 +73,16 @@ def counting_db(db: DatabaseLike | None) -> CountingDatabase:
     return db
 
 
+#: The entry captcha is off in e2e databases (it has its own test, ``test_captcha.py``): a stored value, as if
+#: it came from ``.env`` earlier, so ``.env`` does not have to carry it and the owner gets no «✏️ .env» notice.
+CAPTCHA_OFF_SQL = "insert into settings (key, value, source) values ('CAPTCHA_ENABLED', 'false', 'env_file')"
+
+
 @pytest.fixture
 async def e2e_dsn(pg_dsn: str) -> str:
-    """A fresh database migrated to ``head``."""
+    """A fresh database migrated to ``head`` (the entry captcha off)."""
     await apply_sql(pg_dsn, schema_sql())
+    await apply_sql(pg_dsn, CAPTCHA_OFF_SQL)
     return pg_dsn
 
 

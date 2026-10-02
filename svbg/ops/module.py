@@ -35,6 +35,8 @@ from svbg.ops.settings import opt
 from svbg.ops.state import K_BACKUP, MetaState
 from svbg.ops.timing import zone_of
 from svbg.ops.updates import INTERVAL_S, Fetcher, UpdateChecker, UpdateStatus, describe
+from svbg.tg.admin import nav
+from svbg.tg.report import Report, send_report
 from svbg.tg.ui.renderer import nav_button
 from svbg.tg.ui.view import Toast, View
 
@@ -86,7 +88,6 @@ _T: Final = {
     "b_report": "📊 Отчёт сейчас",
     "b_updates": "🔄 Проверить обновления",
     "b_settings": "⚙️ Настройки",
-    "b_back": "◀️ Меню",
     "t_backup": "Бэкап запущен — файл придёт в «💾 Бэкапы»",
     "t_busy": "Бэкап уже выполняется",
     "t_report": "Готовлю отчёт…",
@@ -233,8 +234,8 @@ class OpsModule:
         keyboard = [
             [nav_button(_T["b_backup"], ACTIONS, A_BACKUP, style="primary")],
             [nav_button(_T["b_report"], ACTIONS, A_REPORT), nav_button(_T["b_updates"], ACTIONS, A_UPDATES)],
-            [nav_button(_T["b_settings"], "set.sec", arg="reports")],
-            [nav_button(_T["b_back"], "home")],
+            [nav_button(_T["b_settings"], "set.v", arg="sys.backup")],
+            nav.back_row(SCREEN),
         ]
         return View("\n".join(lines), parse_mode="HTML", keyboard=keyboard, toast=toast)
 
@@ -265,6 +266,7 @@ class OpsModule:
         return Toast(_T["t_report"])
 
     async def _deliver_report(self, chat_id: int) -> None:
+        text: Report | str
         try:
             text = await self.report.build(partial=True)
         except Exception as exc:
@@ -323,8 +325,15 @@ def build(
     def settings() -> Mapping[str, Any]:
         return settings_service.current()
 
-    async def post(kind: str, text: str, **kw: Any) -> Any:
+    def _bot() -> Any:
+        holder = getattr(deps, "holder", None)
+        return holder.get() if holder is not None else None
+
+    async def post(kind: str, text: str | Report, **kw: Any) -> Any:
         if admin_chat is not None:
+            if isinstance(text, Report):
+                kw.pop("html", None)
+                return await admin_chat.post_report(kind, text, **kw)
             return await admin_chat.post(kind, text, **kw)
         owners = await deps.owner_ids()
         from aiogram.types import InlineKeyboardMarkup
@@ -333,12 +342,18 @@ def build(
         markup = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
         for owner in sorted(owners):
             with contextlib.suppress(Exception):
+                if isinstance(text, Report):
+                    await send_report(notifier, owner, text, reply_markup=markup, bot=_bot())
+                    continue
                 await notifier.send(
                     owner, text, parse_mode="HTML" if kw.get("html") else None, reply_markup=markup
                 )
         return None
 
-    async def send(chat_id: int, text: str, **kw: Any) -> Any:
+    async def send(chat_id: int, text: str | Report, **kw: Any) -> Any:
+        if isinstance(text, Report):
+            kw.pop("parse_mode", None)
+            return await send_report(notifier, chat_id, text, bot=_bot(), **kw)
         return await notifier.send(chat_id, text, **kw)
 
     dsn = getattr(db, "pg_dsn", None)
@@ -363,7 +378,7 @@ def build(
     report = DailyReport(
         db,
         settings=settings,
-        post=lambda text, buttons: post(K_REPORTS, text, html=True, buttons=buttons),
+        post=lambda report, buttons: post(K_REPORTS, report, buttons=buttons),
         buttons=OpsModule.report_buttons,
         state=state,
         attention=getattr(deps, "attention", None),

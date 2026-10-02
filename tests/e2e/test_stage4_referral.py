@@ -29,6 +29,7 @@ async def test_invitee_trial_gives_days_to_both_sides(start_app: StartApp, app_e
         ivan = chat(shop, 5_801)
         await ivan.start()
         await shop.fund(5_801, 17_900)
+        await ivan.press("Подписка", expect="📱 Подписка")
         await ivan.press("Купить подписку", expect="Выберите срок")
         await ivan.press("1 мес.", expect="Спишем с баланса")
         await ivan.press("Оплатить 179")

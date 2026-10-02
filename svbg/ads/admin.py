@@ -21,8 +21,8 @@ from aiogram.filters import Command
 from aiogram.types import CopyTextButton, InlineKeyboardButton, Message
 
 from svbg.ads.service import AdError, AdLink, AdService, check_new_code
-from svbg.content.defaults import HOME
 from svbg.core.money import format_money
+from svbg.tg.admin import nav
 from svbg.tg.ui.forms import Field, Form, ValidationError
 from svbg.tg.ui.forms import text as text_validator
 from svbg.tg.ui.renderer import nav_button
@@ -50,7 +50,6 @@ _T: Final[dict[str, str]] = {
     "Ссылка запоминает, откуда пришёл пользователь (первый переход).",
     "list_empty": "Ссылок пока нет.",
     "new": "➕ Новая ссылка",
-    "menu": "🏠 Меню",
     "to_list": "⬅️ К ссылкам",
     "copy": "📋 Скопировать ссылку",
     "b_on": "▶️ Включить",
@@ -193,7 +192,7 @@ class AdAdminScreens:
             for link in links[:50]
         ]
         rows.append([nav_button(_T["new"], ACTIONS, "new")])
-        rows.append([nav_button(_T["menu"], HOME)])
+        rows.append(nav.back_row(SCREEN_LIST))
         text = _T["list_title"] + ("" if links else "\n\n" + _T["list_empty"])
         return View(text=text, parse_mode="HTML", keyboard=rows)
 

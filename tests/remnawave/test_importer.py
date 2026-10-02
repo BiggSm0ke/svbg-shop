@@ -66,6 +66,8 @@ async def test_apply_links_claims_and_is_idempotent(pg_dsn: str) -> None:
         assert rows["b"]["overrides"] == {"status": "DISABLED"} and rows["a"]["overrides"] == {}
         assert all(r["link_state"] == "linked" and r["plan_id"] is None for r in rows.values())
         assert rows["a"]["desired_squads"] == [env.squad] and rows["a"]["subscription_url"]
+        created = await env.db.raw("select captcha_passed_at from users where telegram_id = 111")
+        assert created[0]["captcha_passed_at"] is not None  # already a VPN user: no entry captcha
         events = await env.db.raw("select count(*) n from subscription_events where kind = 'imported'")
         assert events[0]["n"] == 4
 

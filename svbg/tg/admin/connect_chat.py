@@ -42,10 +42,10 @@ from aiogram.types import (
     ReplyKeyboardRemove,
 )
 
-from svbg.content import defaults
 from svbg.core.component import ProbeError
 from svbg.core.settings.service import RESET, Change, SettingsError
 from svbg.services.admin_chat import SCREEN, AdminChatService, EnsureReport
+from svbg.tg.admin import nav
 from svbg.tg.admin_chat_sink import AdminChatSink, AttentionRelay, ErrorActions
 from svbg.tg.ui import texts as ui_texts
 from svbg.tg.ui.forms import Field, Form, integer
@@ -90,6 +90,8 @@ A_TOGGLE: Final = "tog"
 A_FALLBACK: Final = "fb"
 A_OFF: Final = "off"
 A_OFF_YES: Final = "offok"
+A_NODES: Final = "nodes"  # NOTIFY_ADMIN_NODES on / off
+K_NODES: Final = "NOTIFY_ADMIN_NODES"
 CANCEL_TEXT: Final = "✖️ Не подключать"
 _CHAT_ARG_RE: Final = re.compile(r"^-\d{1,19}$")
 _OUTCOMES_MAX: Final = 256
@@ -144,6 +146,11 @@ _T: Final[dict[str, str]] = {
     "other": "👥 Другая группа",
     "off": "🔌 Отключить",
     "back": "⬅️ Назад",
+    "nodes_on": "✅ Сообщать, когда нода панели падает",
+    "nodes_off": "⬜ Сообщать, когда нода панели падает",
+    "nodes_done_on": "Сообщения о нодах включены",
+    "nodes_done_off": "Сообщения о нодах выключены",
+    "nodes_unavailable": "Сейчас недоступно",
     "off_confirm": (
         "Отключить админ-чат? Уведомления снова будут приходить вам в личку. Темы в группе останутся — "
         "при повторном подключении бот использует их же."
@@ -172,6 +179,8 @@ _T: Final[dict[str, str]] = {
 
 
 class _Settings(Protocol):
+    def current(self) -> Any: ...
+
     async def apply(
         self,
         changes: Sequence[Change],
@@ -231,6 +240,7 @@ class ConnectChat:
         r.action(SCREEN, A_FALLBACK, required_role="owner")(self._fallback)
         r.action(SCREEN, A_OFF, required_role="owner")(self._off)
         r.action(SCREEN, A_OFF_YES, required_role="owner")(self._off_yes)
+        r.action(SCREEN, A_NODES, required_role="owner")(self._nodes)
         r.form(
             Form(
                 name=FORM_ID,
@@ -353,8 +363,38 @@ class ConnectChat:
                 [nav_button(_T["make_topics"], SCREEN, A_TOPICS), nav_button(_T["recheck"], SCREEN, A_CHECK)]
             )
             keyboard.append([nav_button(_T["other"], SCREEN, A_PICK), nav_button(_T["off"], SCREEN, A_OFF)])
-        keyboard.append([nav_button(_T["back"], defaults.SETTINGS_ROOT)])
+        nodes = self._nodes_on()
+        if nodes is not None:
+            label = _T["nodes_on" if nodes else "nodes_off"]
+            keyboard.append([nav_button(label, SCREEN, A_NODES)])
+        keyboard.append(nav.back_row(SCREEN))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=keyboard)
+
+    def _nodes_on(self) -> bool | None:
+        current = getattr(self._settings, "current", None)
+        if not callable(current):
+            return None
+        try:
+            return bool(current().get(K_NODES))
+        except (RuntimeError, KeyError):
+            return None
+
+    async def _nodes(self, ctx: ScreenCtx, _arg: Any) -> HandlerResult:
+        """«Сообщения о нодах» switched right here (the same ``apply()`` as the settings card)."""
+        on = self._nodes_on()
+        if on is None or self._settings is None:
+            return Toast(_T["nodes_unavailable"])
+        try:
+            result = await self._settings.apply(
+                [Change(K_NODES, not on)], source="bot", actor_id=ctx.user.user_id
+            )
+        except SettingsError as exc:
+            return Toast(str(exc)[:190], alert=True)
+        if not result.ok:
+            return Toast("; ".join(result.rejected.values())[:190], alert=True)
+        view = await self._screen(ctx, None)
+        view.toast = _T["nodes_done_on" if not on else "nodes_done_off"]
+        return view
 
     # ------------------------------------------------------------------ actions
 

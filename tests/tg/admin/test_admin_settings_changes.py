@@ -56,7 +56,8 @@ async def test_edit_int_through_form_applies_and_offers_undo(senv: SEnv) -> None
     await senv.click(OWNER, key_cb("TRIAL_DAYS"))
     await senv.press(OWNER, "Изменить")
     prompt = senv.text
-    assert "TRIAL_DAYS" in prompt and "Диапазон: 0–365" in prompt
+    assert "Дней пробного периода" in prompt and "Диапазон: 0–365" in prompt
+    assert "TRIAL_DAYS" not in prompt  # the .env name is only on the card
     assert (await senv.ui_state.get(staff["owner"].user_id)).awaiting is not None
 
     assert await senv.type(OWNER, "7")
@@ -143,7 +144,7 @@ async def test_toggle_bool(make_senv: EnvFactory) -> None:
 async def test_pick_enum_and_forged_choice(senv: SEnv) -> None:
     await add_staff(senv)
     await senv.click(OWNER, key_cb("TRIAL_AUDIENCE"))
-    await senv.press(OWNER, "channel_members")
+    await senv.press(OWNER, "Только подписчикам канала")
     assert "Применено" in senv.text
     assert senv.service.current()["TRIAL_AUDIENCE"] == "channel_members"
     await senv.click(OWNER, f"v1:{ACTIONS}:pick:TRIAL_AUDIENCE:everyone")
@@ -324,7 +325,7 @@ async def test_database_outage_is_reported(senv: SEnv, monkeypatch: pytest.Monke
 
     monkeypatch.setattr(senv.service.store, "write", down)
     await senv.click(OWNER, key_cb("TRIAL_AUDIENCE"))
-    await senv.press(OWNER, "channel_members")
+    await senv.press(OWNER, "Только подписчикам канала")
     assert "Не применено" in senv.text
     assert "база данных недоступна" in senv.text
     assert senv.service.current()["TRIAL_AUDIENCE"] == "all"

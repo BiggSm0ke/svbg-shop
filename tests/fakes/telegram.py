@@ -58,6 +58,8 @@ _JSON_FIELDS = frozenset(
         "reply_parameters",
         "results",
         "prices",
+        "commands",
+        "scope",
     }
 )
 _INT_FIELDS = frozenset(
@@ -105,6 +107,13 @@ class Call:
     @property
     def ok(self) -> bool:
         return self.status == 200
+
+    @property
+    def text(self) -> str:
+        """The message text: ``text`` of a text message or ``caption`` of a picture (the default banner)."""
+        media = self.params.get("media")
+        inner = media.get("caption") if isinstance(media, dict) else None
+        return str(self.params.get("text") or self.params.get("caption") or inner or "")
 
 
 @dataclass(slots=True)
@@ -230,6 +239,7 @@ class FakeTelegram:
         webhook_retry_delay: float = 0.2,
     ) -> None:
         self.calls: list[Call] = []
+        self.commands: dict[tuple[Any, Any], list[Any]] = {}  # setMyCommands by (scope type, chat)
         self.latency: float = 0.0
         self.method_latency: dict[str, float] = {}
         self.blocked_chats: set[int] = set()
@@ -579,6 +589,18 @@ class FakeTelegram:
             and (token is None or c.token == token)
         ]
 
+    async def wait_for_text(
+        self,
+        predicate: Callable[[Call], bool] | None = None,
+        timeout: float = 5.0,
+        *,
+        start: int = 0,
+        ok_only: bool = False,
+    ) -> Call:
+        """Wait for a sent message: ``sendMessage`` or ``sendPhoto`` (the bot's default banner turns a short
+        text into a photo with the text as the caption; :attr:`Call.text` reads either)."""
+        return await self.wait_for("sendMessage|sendPhoto", predicate, timeout, start=start, ok_only=ok_only)
+
     async def wait_for(
         self,
         method: str,
@@ -588,12 +610,14 @@ class FakeTelegram:
         start: int = 0,
         ok_only: bool = False,
     ) -> Call:
-        """Wait until a call of ``method`` (index >= ``start``) matching ``predicate`` is recorded."""
-        m = method.lower()
+        """Wait until a call of ``method`` (index >= ``start``) matching ``predicate`` is recorded.
+
+        ``method`` may list alternatives: ``"sendMessage|sendPhoto"``."""
+        wanted = {m.lower() for m in method.split("|")}
 
         def find() -> Call | None:
             for call in self.calls[start:]:
-                if call.method.lower() != m or (ok_only and not call.ok):
+                if call.method.lower() not in wanted or (ok_only and not call.ok):
                     continue
                 if predicate is None or predicate(call):
                     return call
@@ -982,6 +1006,16 @@ class FakeTelegram:
     async def _m_deletemessage(self, bot: _Bot, params: Mapping[str, Any]) -> Any:
         self._existing(bot, params, "delete")
         bot.messages.pop((self._chat_id(params), params["message_id"]))
+        return True
+
+    async def _m_setmycommands(self, bot: _Bot, params: Mapping[str, Any]) -> Any:
+        scope = params.get("scope") or {"type": "default"}
+        self.commands[(scope.get("type"), scope.get("chat_id"))] = list(params.get("commands") or [])
+        return True
+
+    async def _m_deletemycommands(self, bot: _Bot, params: Mapping[str, Any]) -> Any:
+        scope = params.get("scope") or {"type": "default"}
+        self.commands.pop((scope.get("type"), scope.get("chat_id")), None)
         return True
 
     async def _m_answercallbackquery(self, bot: _Bot, params: Mapping[str, Any]) -> Any:

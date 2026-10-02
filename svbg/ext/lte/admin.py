@@ -815,6 +815,7 @@ def _sid(arg: Any) -> int | None:
 
 def install(router: Any, service: Callable[[], LteService]) -> None:
     """Admin screens ``lte`` / ``lte_grp``, forms and the ``mod`` actions of the user card section."""
+    from svbg.tg.admin import nav
     from svbg.tg.ui.forms import Field, Form, ValidationError, integer
     from svbg.tg.ui.forms import text as text_field
     from svbg.tg.ui.renderer import MODULE_SCREEN, nav_button
@@ -824,7 +825,7 @@ def install(router: Any, service: Callable[[], LteService]) -> None:
         return LteAdmin(service())
 
     def back(screen: str = SCREEN, arg: str | None = None) -> list[Any]:
-        return [nav_button("◀️ Назад", screen, arg=arg), nav_button("🏠 Меню", "home")]
+        return [nav_button("◀️ Назад", screen, arg=arg), nav_button("🛠 Админка", nav.ROOT)]
 
     def result_view(res: Result, screen: str = SCREEN, arg: str | None = None) -> Any:
         return View(text=res.text, parse_mode="HTML", keyboard=[back(screen, arg)])
@@ -852,7 +853,9 @@ def install(router: Any, service: Callable[[], LteService]) -> None:
                 rows.append([nav_button("🧹 История проверена — снять инцидент", SCREEN, "inc")])
             rows.append([nav_button("⛔ Снять все блоки LTE", SCREEN, "rall", style="danger")])
             rows.append([nav_button("⏻ Выключить модуль…", SCREEN, "off")])
-        rows.append([nav_button("🏠 Меню", "home")])
+        if ctx.user.role == "owner" and nav.has_screen(router, "set.v"):
+            rows.append([nav_button("⚙️ Настройки", "set.v", arg="mod.lte")])
+        rows.append(nav.back_row(SCREEN))
         return View(text=overview_text(ov, cfg, at=now()), parse_mode="HTML", keyboard=rows)
 
     @router.action(SCREEN, "mode", required_role="admin")
@@ -1048,7 +1051,7 @@ def install(router: Any, service: Callable[[], LteService]) -> None:
         res = await admin().add_gb(
             int(data["sid"]), int(data["gb"]), actor=ctx.user, reason=data.get("reason")
         )
-        return View(text=res.text, keyboard=[[nav_button("🏠 Меню", "home")]])
+        return View(text=res.text, keyboard=[nav.back_to(nav.ROOT)])
 
     reason_field = Field("reason", REASON_PROMPT, text_field(min_len=3, max_len=300))
     router.form(
@@ -1065,7 +1068,7 @@ def install(router: Any, service: Callable[[], LteService]) -> None:
 
     async def unblock_done(ctx: Any, data: dict[str, Any]) -> Any:
         res = await admin().unblock(int(data["sid"]), actor=ctx.user, reason=data.get("reason"))
-        return View(text=res.text, keyboard=[[nav_button("🏠 Меню", "home")]])
+        return View(text=res.text, keyboard=[nav.back_to(nav.ROOT)])
 
     router.form(Form(FORM_UNBLOCK, (reason_field,), unblock_done, required_role="support"))
 

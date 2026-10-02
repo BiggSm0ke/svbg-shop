@@ -2,11 +2,16 @@
 
 Screens (all code-defined, registered on a :class:`~svbg.tg.ui.router.ScreenRouter`):
 
-* ``settings_root`` — «⚙️ Настройки»: the sections of the registry the user may see (component status in
-  the label for the owner), «🔎 Поиск»; overrides the placeholder content screen of the same code;
+* ``settings_root`` — «🔎 Все настройки» (admin → «⚙️ Система»): «🔎 Поиск» first, then the sections of the
+  registry the user may see (component status in the label for the owner); overrides the placeholder content
+  screen of the same code. The cash desks are not listed there: «Платёжки» leads to «🏦 Кассы»;
 * ``set.sec`` — keys of one section, paginated; «Расширенные» keys are behind a button;
-* ``set.key`` — the card of one key: title, env name, description, current value (secrets as ``••••a1B9``
-  plus a keyed fingerprint), default, source, how a change applies, edit controls;
+* ``set.v`` — a *slice* (:mod:`svbg.tg.admin.slices`): the keys of one admin section (trial days next to the
+  plans, notifications under «📣 Связь»…), switches toggled in place (``set:vtog``);
+* ``set.key`` — the card of one key: title, description, current value (secrets as ``••••a1B9`` plus a keyed
+  fingerprint), default, source, how a change applies, edit controls (enum values by their labels, ready
+  values as buttons), the ``.env`` name on the last line. «⬅️» leads to the key's slice (``KEY@t``: back to
+  the registry tree);
 * ``set.hist`` — the last changes of a key (secrets only as fingerprints);
 * ``set.find`` / ``set.done`` — search results and the result of ``/set`` (shown outside a callback).
 
@@ -51,9 +56,10 @@ from svbg.core.component import Health
 from svbg.core.errors import timeout_guard
 from svbg.core.ids import is_uuid7
 from svbg.core.log import mask, register_secret
-from svbg.core.settings import values
-from svbg.core.settings.registry import Apply, SettingDef
+from svbg.core.settings import labels, values
+from svbg.core.settings.registry import PAYMENTS_SECTION, Apply, SettingDef
 from svbg.core.settings.service import RESET, ApplyResult, Change, SettingsError
+from svbg.tg.admin import nav, slices
 from svbg.tg.ui import codec as codec_mod
 from svbg.tg.ui import texts as ui_texts
 from svbg.tg.ui.forms import Field, Form, ValidationError
@@ -78,6 +84,7 @@ __all__ = [
     "SCREEN_KEY",
     "SCREEN_ROOT",
     "SCREEN_SECTION",
+    "SCREEN_SLICE",
     "SettingsScreens",
     "can_edit_keys",
     "can_open_settings",
@@ -99,6 +106,8 @@ SCREEN_KEY: Final = "set.key"
 SCREEN_HISTORY: Final = "set.hist"
 SCREEN_FIND: Final = "set.find"
 SCREEN_DONE: Final = "set.done"
+SCREEN_SLICE: Final = slices.SCREEN
+SCREEN_KASSAS: Final = "apay"  # svbg.tg.admin.payments.SCREEN_LIST
 ACTIONS: Final = "set"  # callback namespace of the actions below
 A_EDIT: Final = "edit"
 A_TOGGLE: Final = "tog"
@@ -106,6 +115,8 @@ A_PICK: Final = "pick"
 A_RESET: Final = "def"
 A_UNDO: Final = "undo"
 A_SEARCH: Final = "find"
+A_VTOGGLE: Final = "vtog"  # a switch toggled on its slice (arg ``<slice>:<KEY>``)
+TREE_MARK: Final = "@t"  # ``set.key`` arg suffix: the card was opened from the registry tree
 FORM_SEARCH: Final = "set.search"
 FORM_PREFIX: Final = "set.e."
 
@@ -120,15 +131,25 @@ _GROUP_WARN_CACHE: Final = 1024
 
 # Owner-facing texts (Russian), in one place.
 _T: Final[dict[str, str]] = {
-    "root_title": "⚙️ <b>Настройки</b>",
-    "root_hint": "Выберите раздел. Правки сохраняются в .env, большинство работает сразу, без перезапуска.",
+    "root_title": "🔎 <b>Все настройки</b>",
+    "root_hint": "Все настройки бота по разделам, как в файле .env. Обычно быстрее открыть нужный раздел "
+    "админки или найти настройку поиском. Правки сохраняются в .env, почти все работают сразу.",
     "root_empty": "Доступных вам разделов нет.",
     "restart_pending": "♻️ Ждут перезапуска: {keys}",
     "problems": "⚠️ Требуют внимания:",
     "search": "🔎 Поиск",
     "menu": "🏠 Меню",
     "back": "⬅️ Назад",
-    "to_settings": "⚙️ Настройки",
+    "to_settings": "🔎 Все настройки",
+    "kassas": "🏦 Кассы",
+    "key_line": "Ключ в .env: <code>{key}</code>",
+    "slice_more": "🧰 Ещё ({n})",
+    "slice_less": "🙈 Скрыть редкие",
+    "slice_empty": "Здесь нет настроек, которые вам можно менять.",
+    "slice_done": "Готово: «{title}» {state}.",
+    "slice_failed": "Не применено: {reason}",
+    "state_on": "включено",
+    "state_off": "выключено",
     "to_key": "⬅️ К настройке",
     "advanced_show": "🧰 Расширенные ({n})",
     "advanced_hide": "🙈 Скрыть расширенные",
@@ -189,7 +210,7 @@ _T: Final[dict[str, str]] = {
     "смените этот секрет. Настройки меняются только в личном чате с ботом.",
     "applying": "⏳ <b>Применяется…</b>\nПроверка и переподключение занимают время, результат придёт сюда.",
     "applying_plain": "⏳ Применяется… Проверка и переподключение занимают время, результат придёт сюда.",
-    "prompt_title": "✏️ {title} ({key})",
+    "prompt_title": "✏️ {title}",
     "prompt_send": "Отправьте новое значение одним сообщением.",
     "prompt_secret": "🔐 Сообщение с секретом будет удалено сразу после чтения.",
     "search_prompt": "🔎 Что найти? Например: «триал», «токен», «валюта» или имя ключа.",
@@ -209,6 +230,8 @@ _T: Final[dict[str, str]] = {
     "pick_unknown": "Такого варианта нет",
     "not_bool": "Эта настройка не переключается",
 }
+
+_ADMIN_HOME: Final = ("🛠 Админка", nav.ROOT)
 
 _HEALTH_ICON: Final = {
     Health.OK: "✅",
@@ -253,6 +276,8 @@ _DB_ERRORS: Final = (SQLAlchemyError, OSError)
 _TG_ERRORS: Final = (TelegramAPIError, OSError, TimeoutError)
 
 UserLoader = Callable[["TgUser"], Awaitable["UserCtx | None"]]
+#: ``extras(slice_id, user)`` → extra text lines and links of a slice (a stats line, the trial plan's card).
+SliceExtras = Callable[[str, "UserCtx"], Awaitable[tuple[list[str], list[slices.Link]]]]
 
 
 # ---------------------------------------------------------------- access rules
@@ -362,6 +387,7 @@ class SettingsScreens:
         command_timeout: float = 60.0,
         apply_wait: float | None = None,
         notes: Callable[[str], Sequence[str]] | None = None,
+        extras: SliceExtras | None = None,
     ) -> None:
         if undo_ttl <= timedelta(0):
             raise ValueError("undo_ttl must be positive")
@@ -376,6 +402,7 @@ class SettingsScreens:
         self.command_timeout = command_timeout
         self.apply_wait = apply_wait
         self.notes = notes
+        self.extras = extras
         self._group_warned: OrderedDict[int, float] = OrderedDict()
         self._results: OrderedDict[str, _Done] = OrderedDict()
         self._tasks: set[asyncio.Future[Any]] = set()
@@ -396,12 +423,14 @@ class SettingsScreens:
         r.screen(SCREEN_HISTORY, **guard)(self._wrap(self._history_screen))
         r.screen(SCREEN_FIND, **guard)(self._wrap(self._find_screen))
         r.screen(SCREEN_DONE, **guard)(self._wrap(self._done_screen))
+        r.screen(SCREEN_SLICE, **guard)(self._wrap(self._slice_screen))
         r.action(ACTIONS, A_EDIT, **guard)(self._wrap(self._edit_action))
         r.action(ACTIONS, A_TOGGLE, **guard)(self._wrap(self._toggle_action))
         r.action(ACTIONS, A_PICK, **guard)(self._wrap(self._pick_action))
         r.action(ACTIONS, A_RESET, **guard)(self._wrap(self._reset_action))
         r.action(ACTIONS, A_UNDO, **guard)(self._wrap(self._undo_action))
         r.action(ACTIONS, A_SEARCH, **guard)(self._wrap(self._search_action))
+        r.action(ACTIONS, A_VTOGGLE, **guard)(self._wrap(self._vtoggle_action))
         r.form(
             Form(
                 FORM_SEARCH,
@@ -476,6 +505,8 @@ class SettingsScreens:
         raise _Stop(Toast(_T["stale"]))
 
     async def _need_key(self, ctx: ScreenCtx, arg: Any, place: str, *, screen: bool) -> SettingDef:
+        if isinstance(arg, str):
+            arg = arg.removesuffix(TREE_MARK)
         defn = self.registry.find(arg) if isinstance(arg, str) else None
         if defn is None:
             self._stale(screen=screen)
@@ -505,7 +536,7 @@ class SettingsScreens:
     def _short_value(self, defn: SettingDef, value: Any, limit: int = 24) -> str:
         if defn.kind == "bool" and value is not None:
             return _T["on"] if value else _T["off"]
-        return _cut(values.display(defn, value), limit)
+        return _cut(values.display(defn, value, human=True), limit)
 
     def _source_label(self, source: str) -> str:
         if source in ("wizard", "system"):
@@ -539,7 +570,7 @@ class SettingsScreens:
         return lines
 
     def _prompt(self, defn: SettingDef) -> str:
-        lines = [_T["prompt_title"].format(title=defn.title, key=defn.key), defn.description, ""]
+        lines = [_T["prompt_title"].format(title=defn.title), labels.description(defn), ""]
         lines += self._format_hint(defn)
         if defn.choices and defn.kind == "enum":
             lines.append(_T["choices"].format(choices=" | ".join(defn.choices)))
@@ -610,7 +641,12 @@ class SettingsScreens:
         if owner:
             names = {d.component for _, _, defs in sections for d in defs if d.component}
             icons = await self._component_icons({n for n in names if n})
-        lines = [_T["root_title"], "", _T["root_hint"] if sections else _T["root_empty"]]
+        lines = [
+            _T["root_title"],
+            _esc(nav.breadcrumb(SCREEN_ROOT)),
+            "",
+            _T["root_hint"] if sections else _T["root_empty"],
+        ]
         if owner:
             if self.service.restart_pending:
                 keys = ", ".join(sorted(self.service.restart_pending))
@@ -619,7 +655,7 @@ class SettingsScreens:
                 lines += ["", _T["problems"]]
                 for key, problem in sorted(self.service.problems.items())[:5]:
                     lines.append(f"• <code>{_esc(key)}</code>: {_esc(_cut(problem, 200))}")
-        rows: list[list[InlineKeyboardButton]] = []
+        rows: list[list[InlineKeyboardButton]] = [[nav_button(_T["search"], ACTIONS, A_SEARCH)]]
         for sid, title, defs in sections:
             label = f"{self._section_icon(sid)} {title}"
             marks = []
@@ -629,8 +665,7 @@ class SettingsScreens:
             if marks:
                 label += " " + "".join(marks)
             rows.append([await self._btn(ctx, label, SCREEN_SECTION, codec_mod.ACTION_OPEN, sid)])
-        rows.append([nav_button(_T["search"], ACTIONS, A_SEARCH)])
-        rows.append([nav_button(_T["menu"], self.router.home)])
+        rows.append(nav.back_row(SCREEN_ROOT))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     # ------------------------------------------------------------ section
@@ -671,6 +706,11 @@ class SettingsScreens:
             lines.append(_T["section_hint"] if regular else _T["only_advanced"])
         lines += self._notes(sid)
         rows: list[list[InlineKeyboardButton]] = []
+        if subs and sid == PAYMENTS_SECTION and nav.has_screen(self.router, SCREEN_KASSAS):
+            # 28 cash desks are one list with a status and a card each, not 28 setting sections here
+            if page == 0:
+                rows.append([nav_button(_T["kassas"], SCREEN_KASSAS)])
+            subs = []
         if page == 0:
             for sub, sub_title in subs:
                 label = f"{self._section_icon(sub)} {sub_title}"
@@ -682,11 +722,13 @@ class SettingsScreens:
             if defn.key in self.service.problems:
                 marks += "⚠️ "
             label = f"{marks}{defn.title}: {self._short_value(defn, snap[defn.key])}"
-            rows.append([await self._btn(ctx, label, SCREEN_KEY, codec_mod.ACTION_OPEN, defn.key)])
+            rows.append(
+                [await self._btn(ctx, label, SCREEN_KEY, codec_mod.ACTION_OPEN, defn.key + TREE_MARK)]
+            )
         if pages > 1:
-            nav: list[InlineKeyboardButton] = []
+            pager: list[InlineKeyboardButton] = []
             if page > 0:
-                nav.append(
+                pager.append(
                     await self._btn(
                         ctx,
                         _T["prev"],
@@ -695,7 +737,7 @@ class SettingsScreens:
                         _section_arg(sid, page - 1, advanced),
                     )
                 )
-            nav.append(
+            pager.append(
                 await self._btn(
                     ctx,
                     _T["page"].format(page=page + 1, pages=pages),
@@ -705,7 +747,7 @@ class SettingsScreens:
                 )
             )
             if page < pages - 1:
-                nav.append(
+                pager.append(
                     await self._btn(
                         ctx,
                         _T["next"],
@@ -714,7 +756,7 @@ class SettingsScreens:
                         _section_arg(sid, page + 1, advanced),
                     )
                 )
-            rows.append(nav)
+            rows.append(pager)
         if hidden and regular:
             text = _T["advanced_hide"] if advanced else _T["advanced_show"].format(n=len(hidden))
             rows.append(
@@ -741,12 +783,23 @@ class SettingsScreens:
             return None
         return next((e for e in entries if e.applied), None)
 
-    async def _card(self, ctx: ScreenCtx, defn: SettingDef, *, extra: Sequence[str] = ()) -> View:
+    async def _home_button(self, ctx: ScreenCtx, defn: SettingDef) -> InlineKeyboardButton:
+        """«⬅️ <slice>»: where the key lives in the admin (its card's way back)."""
+        home = slices.home_of(defn)
+        screen, arg = slices.target_of(home)
+        label = "⬅️ " + nav.short(slices.title_of(home))
+        if arg is None:
+            return nav_button(label, screen)
+        return await self._btn(ctx, label, screen, codec_mod.ACTION_OPEN, arg)
+
+    async def _card(
+        self, ctx: ScreenCtx, defn: SettingDef, *, extra: Sequence[str] = (), tree: bool = False
+    ) -> View:
         key = defn.key
         snap = self.service.current()
         value = snap[key]
         source = snap.source(key)
-        lines = [f"<b>{_esc(defn.title)}</b>", f"<code>{_esc(key)}</code>", _esc(defn.description), ""]
+        lines = [f"<b>{_esc(defn.title)}</b>", _esc(labels.description(defn)), ""]
         if defn.is_secret and value not in (None, ""):
             fp = self.service.crypto.value_fingerprint(str(value))
             lines.append(_T["now_secret"].format(value=_esc(values.display(defn, value)), fp=_esc(fp)))
@@ -782,6 +835,7 @@ class SettingsScreens:
             lines += ["", block]
         if extra:
             lines += ["", *extra]
+        lines += ["", _T["key_line"].format(key=_esc(key))]
 
         rows: list[list[InlineKeyboardButton]] = []
         if block is None:
@@ -789,27 +843,184 @@ class SettingsScreens:
                 label = _T["turn_off"] if value else _T["turn_on"]
                 rows.append([await self._btn(ctx, label, ACTIONS, A_TOGGLE, key)])
             elif defn.kind == "enum" and defn.choices:
-                row: list[InlineKeyboardButton] = []
-                for choice in defn.choices:
-                    label = f"✅ {choice}" if choice == value else choice
-                    row.append(await self._btn(ctx, label, ACTIONS, A_PICK, f"{key}:{choice}"))
-                    if len(row) == 3:
-                        rows.append(row)
-                        row = []
-                if row:
-                    rows.append(row)
+                rows += await self._choice_rows(ctx, defn, value)
             else:
+                rows += await self._preset_rows(ctx, defn, value)
                 rows.append([await self._btn(ctx, _T["edit"], ACTIONS, A_EDIT, key)])
             if source != "default":
                 rows.append([await self._btn(ctx, _T["reset"], ACTIONS, A_RESET, key)])
         rows.append([await self._btn(ctx, _T["history"], SCREEN_HISTORY, codec_mod.ACTION_OPEN, key)])
-        back = _section_arg(defn.section, 0, defn.advanced)
-        rows.append([await self._btn(ctx, _T["back"], SCREEN_SECTION, codec_mod.ACTION_OPEN, back)])
+        if tree:
+            back = _section_arg(defn.section, 0, defn.advanced)
+            rows.append([await self._btn(ctx, _T["back"], SCREEN_SECTION, codec_mod.ACTION_OPEN, back)])
+        else:
+            rows.append([await self._home_button(ctx, defn), nav_button(*_ADMIN_HOME)])
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
+
+    async def _choice_rows(
+        self, ctx: ScreenCtx, defn: SettingDef, value: Any
+    ) -> list[list[InlineKeyboardButton]]:
+        """Enum values by their labels, ✅ on the current one (long labels one per row)."""
+        shown = [(choice, labels.choice_label(defn, choice) or choice) for choice in defn.choices or ()]
+        per_row = 1 if any(len(text) > 14 for _, text in shown) else 3
+        rows: list[list[InlineKeyboardButton]] = []
+        row: list[InlineKeyboardButton] = []
+        for choice, text in shown:
+            label = f"✅ {text}" if choice == value else text
+            row.append(await self._btn(ctx, label, ACTIONS, A_PICK, f"{defn.key}:{choice}"))
+            if len(row) == per_row:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        return rows
+
+    async def _preset_rows(
+        self, ctx: ScreenCtx, defn: SettingDef, value: Any
+    ) -> list[list[InlineKeyboardButton]]:
+        """Ready values (``TRIAL_DAYS``: 1 / 3 / 7) as one row of buttons, ✅ on the current one."""
+        row: list[InlineKeyboardButton] = []
+        for preset in labels.presets(defn):
+            text = values.to_text(defn, preset)
+            label = f"✅ {text}" if preset == value else text
+            row.append(await self._btn(ctx, label, ACTIONS, A_PICK, f"{defn.key}:{text}"))
+        return [row] if row else []
 
     async def _key_screen(self, ctx: ScreenCtx, arg: Any) -> View:
         defn = await self._need_key(ctx, arg, "card", screen=True)
-        return await self._card(ctx, defn)
+        return await self._card(ctx, defn, tree=isinstance(arg, str) and arg.endswith(TREE_MARK))
+
+    # ------------------------------------------------------------ slices (set.v)
+
+    def _slice_defs(self, sl: slices.Slice) -> tuple[list[SettingDef], list[SettingDef]]:
+        """``(shown, more)`` definitions of a slice, in its order (keys of other modules may be absent)."""
+        if sl.id == slices.OTHER:
+            loose = [d for d in self.registry.all() if slices.home_of(d) == slices.OTHER]
+            return [d for d in loose if not d.advanced], [d for d in loose if d.advanced]
+        if sl.sections:
+            by_section = self.registry.by_section()
+            defs = [d for sid in sl.sections for d in by_section.get(sid, [])]
+            return [d for d in defs if not d.advanced], [d for d in defs if d.advanced]
+
+        def found(keys: Sequence[str]) -> list[SettingDef]:
+            return [d for d in (self.registry.find(k) for k in keys) if d is not None]
+
+        return found((*sl.keys, *sl.mirrors)), found(sl.more)
+
+    def _slice_members(self, sl: slices.Slice) -> set[str]:
+        shown, more = self._slice_defs(sl)
+        return {d.key for d in (*shown, *more)}
+
+    @staticmethod
+    def _slice_arg(arg: Any) -> tuple[slices.Slice, bool] | None:
+        if not isinstance(arg, str):
+            return None
+        sid, _, flag = arg.partition(":")
+        sl = slices.slice_of(sid)
+        if sl is None or flag not in ("", "m"):
+            return None
+        return sl, flag == "m"
+
+    async def _slice_screen(self, ctx: ScreenCtx, arg: Any) -> View:
+        parsed = self._slice_arg(arg)
+        if parsed is None:
+            self._stale(screen=True)
+        return await self.slice_view(ctx, parsed[0], expanded=parsed[1])
+
+    async def slice_view(
+        self,
+        ctx: ScreenCtx,
+        sl: slices.Slice,
+        *,
+        expanded: bool = False,
+        note: str | None = None,
+        undo: str | None = None,
+    ) -> View:
+        """A slice: header, one sentence, the keys the viewer may see, «🧰 Ещё», links, the way back."""
+        user = ctx.user
+        shown, more = self._slice_defs(sl)
+        shown = [d for d in shown if can_view(user, d)]
+        more = [d for d in more if can_view(user, d)]
+        extra_lines: list[str] = []
+        extra_links: list[slices.Link] = []
+        if self.extras is not None:
+            try:
+                extra_lines, extra_links = await self.extras(sl.id, user)
+            except Exception:  # an optional line never breaks the screen
+                log.exception("slice extras for %s failed", sl.id)
+        links = [
+            link
+            for link in (*sl.links, *extra_links)
+            if user.at_least(link.role)
+            and (link.perm is None or user.has_perm(link.perm))
+            and nav.has_route(self.router, link.screen, link.action)  # a module that is not wired: no button
+        ]
+        if not shown and not more and not links:
+            await self._deny(ctx, f"slice:{sl.id}", screen=True)
+        if not shown:  # a small slice of rarely needed keys: no lonely «Ещё» button
+            shown, more, expanded = more, [], False
+        lines = [f"{_esc(nav.breadcrumb(sl.hub))} › <b>{_esc(sl.title)}</b>", "", _esc(sl.intro)]
+        lines += extra_lines
+        if note:
+            lines += ["", note]
+        rows: list[list[InlineKeyboardButton]] = []
+        if undo:
+            rows.append([nav_button(_T["undo"], ACTIONS, A_UNDO, undo)])
+        snap = self.service.current()
+        for defn in shown + (more if expanded else []):
+            rows.append([await self._slice_button(ctx, sl, defn, snap[defn.key])])
+        if more:
+            if expanded:
+                rows.append([nav_button(_T["slice_less"], SCREEN_SLICE, arg=sl.id)])
+            else:
+                label = _T["slice_more"].format(n=len(more))
+                rows.append([nav_button(label, SCREEN_SLICE, arg=f"{sl.id}:m")])
+        for link in links:
+            data = await ctx.callback(link.screen, link.action, link.arg)
+            rows.append([InlineKeyboardButton(text=_cut(link.label, MAX_LABEL_CHARS), callback_data=data)])
+        rows.append(nav.back_to(nav.reachable(self.router, user, sl.hub)))
+        return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
+
+    async def _slice_button(
+        self, ctx: ScreenCtx, sl: slices.Slice, defn: SettingDef, value: Any
+    ) -> InlineKeyboardButton:
+        marks = ("🔒 " if defn.key in self.service.locked else "") + (
+            "⚠️ " if defn.key in self.service.problems else ""
+        )
+        if sl.toggles and defn.kind == "bool" and self._edit_block(defn) is None:
+            label = f"{marks}{'✅' if value else '⬜'} {defn.title}"
+            return await self._btn(ctx, label, ACTIONS, A_VTOGGLE, f"{sl.id}:{defn.key}")
+        label = f"{marks}{defn.title}: {self._short_value(defn, value)}"
+        return await self._btn(ctx, label, SCREEN_KEY, codec_mod.ACTION_OPEN, defn.key)
+
+    async def _vtoggle_action(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:
+        """A switch of a slice toggled in place: the same ``apply()`` as the card, then the slice again with
+        «↩️ Отменить» on top."""
+        sid, _, key = arg.partition(":") if isinstance(arg, str) else ("", "", "")
+        sl = slices.slice_of(sid)
+        if sl is None or not sl.toggles:
+            self._stale(screen=False)
+        defn = await self._need_editable(ctx, key, "vtog")
+        if defn.kind != "bool" or defn.key not in self._slice_members(sl):
+            return Toast(_T["not_bool"])
+        task = self._start_apply(ctx.user, defn, not bool(self.service.current()[defn.key]))
+        result = await self._settle(
+            task, user=ctx.user, chat_id=ctx.chat_id, key=defn.key, guard_s=self.router.handler_timeout
+        )
+        if result is None:
+            return self._pending_view()
+        expanded = defn.key in {d.key for d in self._slice_defs(sl)[1]}
+        if result.rejected:
+            reason = next(iter(result.rejected.values()))
+            note = _esc(_T["slice_failed"].format(reason=_cut(reason, 300)))
+            return await self.slice_view(ctx, sl, expanded=expanded, note=note)
+        if defn.key not in result.applied:
+            return await self.slice_view(ctx, sl, expanded=expanded, note=_T["unchanged"])
+        state = _T["state_on"] if self.service.current()[defn.key] else _T["state_off"]
+        note = _esc(_T["slice_done"].format(title=defn.title, state=state))
+        view = await self.slice_view(ctx, sl, expanded=expanded, note=note, undo=result.batch_id)
+        view.toast = state.capitalize()
+        return view
 
     # ------------------------------------------------------------ history
 
@@ -973,7 +1184,7 @@ class SettingsScreens:
         rows.append(
             [
                 await self._btn(ctx, _T["to_key"], SCREEN_KEY, codec_mod.ACTION_OPEN, defn.key),
-                nav_button(_T["to_settings"], SCREEN_ROOT),
+                await self._home_button(ctx, defn),
             ]
         )
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
@@ -1017,8 +1228,11 @@ class SettingsScreens:
         if not sep:
             self._stale(screen=False)
         defn = await self._need_editable(ctx, key, "pick")
-        if defn.kind != "enum" or not defn.choices or choice not in defn.choices:
-            return Toast(_T["pick_unknown"])
+        if defn.kind == "enum":
+            if not defn.choices or choice not in defn.choices:
+                return Toast(_T["pick_unknown"])
+        elif choice not in {values.to_text(defn, p) for p in labels.presets(defn)}:
+            return Toast(_T["pick_unknown"])  # a ready value of the card only, never free text
         return await self._change(ctx, defn, choice)
 
     async def _reset_action(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:
@@ -1296,10 +1510,54 @@ class _Deps(Protocol):
     def settings(self) -> SettingsService: ...
 
 
+_REFERRAL_SQL: Final = """
+SELECT (SELECT count(*) FROM referrals WHERE attached_at >= now() - interval '30 days') AS invited,
+       (SELECT count(*) FROM referral_rewards
+         WHERE status = 'granted' AND granted_at >= now() - interval '30 days') AS rewards
+"""
+
+
+def slice_extras(deps: Any) -> SliceExtras:
+    """Live bits of two slices: the trial plan's card on «🎁 Пробный период», a 30-day line on «🤝 Рефералка»
+    (one SQL, only while the program is on)."""
+    import sqlalchemy as sa
+
+    db = getattr(deps, "db", None)
+    catalog = getattr(deps, "catalog", None)
+    settings = getattr(deps, "settings", None)
+
+    async def extras(slice_id: str, user: UserCtx) -> tuple[list[str], list[slices.Link]]:
+        if slice_id == "p.trial" and catalog is not None and user.has_perm("plans"):
+            plans = getattr(getattr(catalog, "snapshot", None), "plans", ())
+            trial = next((p for p in plans if getattr(p, "is_trial", False)), None)
+            if trial is not None:
+                label = f"📦 Тариф «{_cut(trial.title('ru'), 30)}»"
+                return [], [slices.Link(label, "pl", arg=str(trial.id), perm="plans")]
+        if slice_id == "m.ref" and db is not None and settings is not None:
+            if not settings.current().get("REFERRAL_ENABLED"):
+                return [], []
+            try:
+                async with db.read() as conn:
+                    row = (await conn.execute(sa.text(_REFERRAL_SQL))).mappings().one()
+            except _DB_ERRORS as e:
+                log.debug("referral numbers unavailable: %s", type(e).__name__)
+                return [], []
+            line = f"За 30 дней пришло по приглашениям: {row['invited']}, наград выдано: {row['rewards']}."
+            return ["", line], []
+        return [], []
+
+    return extras
+
+
 def setup(router: ScreenRouter, deps: _Deps) -> Router:
     """Module entry point for ``svbg.app`` (``setup(router, deps)``): register screens, return the commands
     router (include it before the screen router's catch-all handlers)."""
-    screens = SettingsScreens(router, deps.settings, notes=getattr(deps, "settings_notes", None))
+    screens = SettingsScreens(
+        router,
+        deps.settings,
+        notes=getattr(deps, "settings_notes", None),
+        extras=slice_extras(deps),
+    )
     screens.install()
     on_stop = getattr(deps, "on_stop", None)
     if callable(on_stop):  # graceful shutdown waits for changes still being applied

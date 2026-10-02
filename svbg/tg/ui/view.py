@@ -41,6 +41,9 @@ class View:
 
     ``mode="new"`` sends a fresh message (and deletes the previous main message) instead of editing it.
     ``preview`` sets link preview options for text messages (the "preview link" media mode).
+    ``banner``: ``None`` lets the default banner policy (:mod:`svbg.tg.banner`) decide, ``False`` keeps the
+    message without a picture (a content screen whose picture the owner removed). ``picture`` is the content
+    media to show instead of the default banner when the view is sent outside the router (notifications).
     """
 
     text: str = ""
@@ -52,6 +55,8 @@ class View:
     toast_alert: bool = False
     mode: Literal["edit", "new"] = "edit"
     preview: LinkPreviewOptions | None = None
+    banner: bool | None = None
+    picture: int | None = None
 
     def __post_init__(self) -> None:
         if self.entities and self.parse_mode:

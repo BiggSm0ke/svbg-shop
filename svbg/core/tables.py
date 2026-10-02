@@ -58,6 +58,9 @@ users = sa.Table(
     sa.Column("wallet_minor", sa.BigInteger, nullable=False, server_default=sa.text("0")),
     # Stage 3: «акции и новости» opt-in of marketing broadcasts (``svbg.broadcasts.segments``).
     sa.Column("notify_marketing", sa.Boolean, nullable=False, server_default=sa.true()),
+    # Entry captcha (``svbg.tg.user.captcha``): when the user tapped the right emoji; NULL — not passed yet.
+    # Users who were there before the captcha (migration 0006) and imported users are marked passed.
+    sa.Column("captcha_passed_at", UtcDateTime, nullable=True),
     sa.CheckConstraint(_in("role", USER_ROLES), name="role"),
     sa.CheckConstraint("wallet_minor >= 0", name="wallet_minor"),
     sa.CheckConstraint("jsonb_typeof(perms) = 'array'", name="perms_array"),

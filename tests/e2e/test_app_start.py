@@ -59,7 +59,7 @@ async def test_start_shows_home_screen_and_registers_user(start_app: StartApp, a
     assert health["bot"].status is Health.OK
 
 
-async def test_owner_sees_settings_button_and_user_does_not(start_app: StartApp, app_env: AppEnv) -> None:
+async def test_owner_sees_the_admin_button_and_user_does_not(start_app: StartApp, app_env: AppEnv) -> None:
     tg = app_env.tg
     await start_app()
     tg.push_message(OWNER_ID, "/start")
@@ -71,8 +71,9 @@ async def test_owner_sees_settings_button_and_user_does_not(start_app: StartApp,
         markup = call.params.get("reply_markup") or {}  # type: ignore[attr-defined]
         return [b["text"] for row in markup.get("inline_keyboard", []) for b in row]
 
-    assert any("Настройки" in label for label in labels(owner_call))
-    assert not any("Настройки" in label for label in labels(user_call))
+    assert [label for label in labels(owner_call) if "Админка" in label] == ["🛠 Админка"]
+    assert not any("Настройки" in label or "Тарифы" in label for label in labels(owner_call))  # one entry
+    assert not any("Админка" in label for label in labels(user_call))
 
 
 async def test_without_owner_users_see_setup_notice(start_app: StartApp, app_env: AppEnv) -> None:
@@ -80,8 +81,8 @@ async def test_without_owner_users_see_setup_notice(start_app: StartApp, app_env
     tg = app_env.tg
     await start_app()
     tg.push_message(3003, "/start")
-    call = await tg.wait_for("sendMessage", lambda c: c.params.get("chat_id") == 3003, timeout=10)
-    assert "настраивается" in call.params["text"]
+    call = await tg.wait_for("sendMessage|sendPhoto", lambda c: c.params.get("chat_id") == 3003, timeout=10)
+    assert "настраивается" in call.text
 
 
 async def test_health_and_ready_are_served_locally(start_app: StartApp) -> None:

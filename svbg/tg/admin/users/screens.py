@@ -3,6 +3,9 @@
 Screens (code-defined, on the :class:`~svbg.tg.ui.router.ScreenRouter`):
 
 * ``au.find`` — asks for a query (form ``au.f.find``); ``au.q`` — results for a query (one hit → the card);
+  :meth:`UserScreens.search_view` serves the admin root, where a typed ID or a forwarded message is a query;
+* ``au.new`` (newest users), ``au.paid`` (latest payments), ``au.ban`` (banned users): 20 rows, one SQL each;
+* ``au.days`` — «➕ Дни» with ready values (+1 … +90, −1, −7) or «✏️ Своё», then the reason;
 * ``au`` — the card: who, role, status, balance (not for Support), subscription, money counters; buttons by
   the viewer's rights: ``±дни``, «Выдать тариф», «Баланс», «Устройства», «Новая ссылка», «Написать»,
   «Заблокировать»/«Разблокировать», histories, «Роль» (owner);
@@ -28,6 +31,7 @@ import logging
 import re
 import time
 import uuid
+import weakref
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime, tzinfo
 from typing import TYPE_CHECKING, Any, Final
@@ -38,7 +42,7 @@ from aiogram import F, Router
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
-from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import CallbackQuery, CopyTextButton, InlineKeyboardButton, Message
 
 from svbg.core.clock import now
 from svbg.core.money import format_money, parse_money
@@ -65,16 +69,22 @@ __all__ = [
     "ADMIN_HOME",
     "GROUP_PREFIX",
     "ROLE_SCREEN",
+    "SCREEN_BANNED",
     "SCREEN_CARD",
+    "SCREEN_DAYS",
     "SCREEN_FIND",
+    "SCREEN_NEW",
+    "SCREEN_PAID",
     "SCREEN_RESULTS",
     "UserScreens",
     "card_button",
+    "installed_on",
 ]
 
 log = logging.getLogger("svbg.tg.admin.users")
 
-ADMIN_HOME: Final = "adm"  # svbg.tg.admin.dashboard.SCREEN
+ADMIN_HOME: Final = "adm"  # svbg.tg.admin.nav.ROOT
+USERS_HUB: Final = "adm.u"  # svbg.tg.admin.nav.HUB_USERS
 ROLE_SCREEN: Final = "rl"  # svbg.tg.admin.roles.SCREEN_EDIT
 SCREEN_FIND: Final = "au.find"
 SCREEN_RESULTS: Final = "au.q"
@@ -85,11 +95,16 @@ SCREEN_LEDGER: Final = "au.led"
 SCREEN_EVENTS: Final = "au.ev"
 SCREEN_PLANS: Final = "au.pl"
 SCREEN_CONFIRM: Final = "au.cf"
+SCREEN_DAYS: Final = "au.days"
+SCREEN_NEW: Final = "au.new"
+SCREEN_PAID: Final = "au.paid"
+SCREEN_BANNED: Final = "au.ban"
 ACTIONS: Final = "aua"
 GROUP_PREFIX: Final = "auc"
 
 F_FIND: Final = "au.f.find"
 F_DAYS: Final = "au.f.days"
+F_DAYS_REASON: Final = "au.f.dayr"  # a ready value was tapped: only the reason is asked
 F_PLAN: Final = "au.f.plan"
 F_WALLET: Final = "au.f.wal"
 F_BAN: Final = "au.f.ban"
@@ -101,6 +116,16 @@ _GROUP_RE: Final = re.compile(rf"^{GROUP_PREFIX}:(\d{{1,18}})$")
 _PAY_ID_RE: Final = re.compile(r"^[0-9a-f-]{36}$")
 _DENIED_AUDIT_S: Final = 60.0
 _LAST_CARD_MAX: Final = 1000
+DAY_PRESETS: Final[tuple[int, ...]] = (1, 3, 7, 30, 90, -1, -7)
+LIST_LIMIT: Final = 20
+
+_INSTALLED: weakref.WeakKeyDictionary[Any, UserScreens] = weakref.WeakKeyDictionary()
+
+
+def installed_on(router: Any) -> UserScreens | None:
+    """The user screens installed on ``router`` (the admin root searches through them)."""
+    return _INSTALLED.get(router)
+
 
 _T: Final[dict[str, str]] = {
     "find_prompt": "🔍 Кого ищем? Пришлите ID, @username, имя, ссылку подписки, shortUuid или номер платежа.",
@@ -109,6 +134,8 @@ _T: Final[dict[str, str]] = {
     "nothing": "🔍 По «{q}» никого не нашлось.",
     "again": "🔍 Искать ещё",
     "admin": "⬅️ Админка",
+    "users_hub": "⬅️ Пользователи",
+    "admin_root": "🛠 Админка",
     "to_card": "⬅️ К карточке",
     "not_found": "Пользователь не найден",
     "more": "Дальше ➡️",
@@ -120,6 +147,7 @@ _T: Final[dict[str, str]] = {
     "card_dates": "С нами с {created} · был(а) {seen}",
     "card_banned": "⛔️ Заблокирован(а) с {at}",
     "card_bot_blocked": "🔕 Заблокировал(а) бота {at}",
+    "card_no_captcha": "🧩 Капчу ещё не прошёл(а)",
     "card_wallet": "💰 Баланс: <b>{balance}</b>",
     "card_paid": "💳 Оплат: {n} на {total}{last}",
     "card_paid_last": ", последняя {at}",
@@ -143,6 +171,15 @@ _T: Final[dict[str, str]] = {
     "devices_unlimited": "без лимита",
     "devices_panel": "по умолчанию панели",
     "b_days": "➕ Дни",
+    "b_copy_link": "📋 Ссылка",
+    "b_custom": "✏️ Своё",
+    "days_title": "➕ <b>Дни</b> · {who}\n\nСколько дней добавить? Минус убавляет. Причину спрошу дальше.",
+    "days_picked": "➕ {days} дн.",
+    "b_find": "🔍 Найти",
+    "new_hint": "Последние 20 человек, которые пришли в бот.",
+    "paid_hint": "Последние оплаты, без тестовых и перенесённых из другого бота.",
+    "ban_hint": "Кого заблокировали в боте, сначала последние.",
+    "list_empty": "Пока никого.",
     "b_plan": "🎁 Выдать тариф",
     "b_wallet": "💰 Баланс",
     "b_ledger": "👛 Движения",
@@ -236,6 +273,11 @@ EVENT_KIND: Final[Mapping[str, str]] = {
     "user.reissue": "перевыпуск ссылки",
     "user.message": "сообщение",
     "role.set": "роль изменена",
+}
+_TITLES: Final[Mapping[str, str]] = {
+    SCREEN_NEW: "🆕 Новые",
+    SCREEN_PAID: "💳 Недавно оплатили",
+    SCREEN_BANNED: "⛔ Заблокированные",
 }
 DISABLED_REASON: Final[Mapping[str, str]] = {
     "BOT_BAN": "блок в боте",
@@ -349,6 +391,8 @@ class UserScreens:
         grant: dict[str, Any] = {"required_role": "admin", "perm": "subs.grant"}
         money: dict[str, Any] = {"required_role": "admin", "perm": "wallet.adjust"}
         ban: dict[str, Any] = {"required_role": "admin", "perm": "users.ban"}
+        stats: dict[str, Any] = {"required_role": "admin", "perm": "stats"}
+        _INSTALLED[r] = self
         screens: Sequence[tuple[str, Callable[[ScreenCtx, Any], Awaitable[Any]], dict[str, Any]]] = (
             (SCREEN_FIND, self._find_screen, staff),
             (SCREEN_RESULTS, self._results_screen, staff),
@@ -359,11 +403,16 @@ class UserScreens:
             (SCREEN_EVENTS, self._events_screen, staff),
             (SCREEN_PLANS, self._plans_screen, grant),
             (SCREEN_CONFIRM, self._confirm_screen, staff),
+            (SCREEN_DAYS, self._days_screen, grant),
+            (SCREEN_NEW, self._new_screen, staff),
+            (SCREEN_PAID, self._paid_screen, stats),
+            (SCREEN_BANNED, self._banned_screen, ban),
         )
         for code, fn, guard in screens:
             r.screen(code, **guard)(fn)
         actions: Sequence[tuple[str, Callable[[ScreenCtx, Any], Awaitable[Any]], dict[str, Any]]] = (
             ("days", self._a_days, grant),
+            ("dp", self._a_day_preset, grant),
             ("plan", self._a_plan, grant),
             ("wal", self._a_wallet, money),
             ("ban", self._a_ban, ban),
@@ -378,6 +427,7 @@ class UserScreens:
         forms: Sequence[tuple[Form, dict[str, Any]]] = (
             (Form(F_FIND, (Field("q", _T["find_prompt"], _query_validator),), self._f_find), staff),
             (Form(F_DAYS, (Field("days", _T["f_days"], _signed_days), reason), self._f_days), grant),
+            (Form(F_DAYS_REASON, (reason,), self._f_days), grant),
             (
                 Form(
                     F_PLAN,
@@ -549,13 +599,25 @@ class UserScreens:
 
     async def _results_screen(self, ctx: ScreenCtx, arg: Any) -> View:
         text = arg if isinstance(arg, str) else ""
+        view = await self.search_view(ctx, text)
+        if view is not None:
+            return view
+        return View(
+            text=_T["nothing"].format(q=_esc(text.strip()[:64])),
+            parse_mode="HTML",
+            keyboard=[[nav_button(_T["again"], SCREEN_FIND)], self._back_row()],
+        )
+
+    async def search_view(self, ctx: ScreenCtx, text: str) -> View | None:
+        """The answer to a query: the card (one hit), the list (several), the reason a query is not
+        searchable; ``None`` when nobody was found (one SQL)."""
         try:
             q = parse_query(text)
         except QueryError as e:
             return View(
                 text=_esc(str(e)),
                 parse_mode="HTML",
-                keyboard=[[nav_button(_T["again"], SCREEN_FIND)], [nav_button(_T["admin"], ADMIN_HOME)]],
+                keyboard=[[nav_button(_T["again"], SCREEN_FIND)], self._back_row()],
             )
         async with self.db.read() as conn:
             found = await search(conn, q)
@@ -563,11 +625,7 @@ class UserScreens:
         if len(found) == 1:
             return await self.card_view(ctx, found[0].user_id)
         if not found:
-            return View(
-                text=_T["nothing"].format(q=shown),
-                parse_mode="HTML",
-                keyboard=[[nav_button(_T["again"], SCREEN_FIND)], [nav_button(_T["admin"], ADMIN_HOME)]],
-            )
+            return None
         lines = [_T["results"].format(q=shown, n=len(found))]
         if len(found) >= 10:
             lines.append(_T["results_more"].format(n=len(found)))
@@ -579,8 +637,13 @@ class UserScreens:
                 label += f" @{hit.username[:32]}"
             label += f" · {hit.telegram_id if hit.telegram_id is not None else '#' + str(hit.user_id)}"
             rows.append([nav_button(label[:64], SCREEN_CARD, arg=str(hit.user_id))])
-        rows.append([nav_button(_T["again"], SCREEN_FIND), nav_button(_T["admin"], ADMIN_HOME)])
+        rows.append([nav_button(_T["again"], SCREEN_FIND)])
+        rows.append(self._back_row())
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
+
+    @staticmethod
+    def _back_row() -> list[InlineKeyboardButton]:
+        return [nav_button(_T["users_hub"], USERS_HUB), nav_button(_T["admin_root"], ADMIN_HOME)]
 
     # ------------------------------------------------------------ card
 
@@ -596,7 +659,7 @@ class UserScreens:
         if card is None:
             return View(
                 text=_T["not_found"],
-                keyboard=[[nav_button(_T["again"], SCREEN_FIND), nav_button(_T["admin"], ADMIN_HOME)]],
+                keyboard=[[nav_button(_T["again"], SCREEN_FIND)], self._back_row()],
             )
         self._remember(ctx, uid)
         text = self._card_text(ctx.user, card)
@@ -627,6 +690,8 @@ class UserScreens:
             lines.append(_T["card_banned"].format(at=self._datetime(card.banned_at)))
         if card.bot_blocked_at is not None:
             lines.append(_T["card_bot_blocked"].format(at=self._date(card.bot_blocked_at)))
+        if not card.captcha_passed and card.role == "user":
+            lines.append(_T["card_no_captcha"])
         lines.append("")
         if viewer.at_least("admin"):  # 04 §9.1: Support sees no sums of payments and no wallet
             lines.append(_T["card_wallet"].format(balance=_esc(self._fmt_money(card.wallet_minor))))
@@ -703,7 +768,7 @@ class UserScreens:
         own = card.user_id == viewer.user_id and viewer.role != "owner"
         if _can(viewer, Act.SUBS_GRANT) and not own:
             if card.live:
-                add(nav_button(_T["b_days"], ACTIONS, "days", uid))
+                add(nav_button(_T["b_days"], SCREEN_DAYS, arg=uid))
             add(nav_button(_T["b_plan"], SCREEN_PLANS, arg=uid))
         if _can(viewer, Act.WALLET_ADJUST) and not own:
             add(nav_button(_T["b_wallet"], ACTIONS, "wal", uid))
@@ -731,8 +796,11 @@ class UserScreens:
         )
         if viewer.role == "owner" and card.user_id != viewer.user_id:
             rows.append([nav_button(_T["b_role"], ROLE_SCREEN, arg=uid)])
+        if card.subscription_url and card.subscription_url.startswith(("https://", "http://")):
+            link = card.subscription_url[:256]
+            rows.append([InlineKeyboardButton(text=_T["b_copy_link"], copy_text=CopyTextButton(text=link))])
         rows.append([nav_button(_T["refresh"], SCREEN_CARD, arg=uid), nav_button(_T["again"], SCREEN_FIND)])
-        rows.append([nav_button(_T["admin"], ADMIN_HOME)])
+        rows.append(self._back_row())
         return rows
 
     # ------------------------------------------------------------ histories
@@ -908,6 +976,82 @@ class UserScreens:
                 ]
             ],
         )
+
+    # ------------------------------------------------------------ «➕ Дни» with ready values
+
+    async def _days_screen(self, ctx: ScreenCtx, arg: Any) -> View | Redirect:
+        uid = _uid(arg)
+        who = await self._header(uid) if uid is not None else None
+        if uid is None or who is None:
+            return Redirect(USERS_HUB, toast=_T["not_found"])
+        self._remember(ctx, uid)
+        buttons = [
+            nav_button(f"{'+' if n > 0 else '−'}{abs(n)}", ACTIONS, "dp", f"{uid}:{n}") for n in DAY_PRESETS
+        ]
+        rows = [buttons[:3], buttons[3:5], buttons[5:]]
+        rows.append([nav_button(_T["b_custom"], ACTIONS, "days", str(uid))])
+        rows.append([nav_button(_T["to_card"], SCREEN_CARD, arg=str(uid))])
+        return View(text=_T["days_title"].format(who=who), parse_mode="HTML", keyboard=rows)
+
+    async def _a_day_preset(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:
+        parts = _split(arg, 2)
+        uid = _uid(parts[0]) if parts else None
+        try:
+            days = int(parts[1]) if parts else 0
+        except ValueError:
+            days = 0
+        if uid is None or days not in DAY_PRESETS:
+            return Toast(_T["not_found"])
+        view = await self._start(ctx, F_DAYS_REASON, uid, days=days)
+        if isinstance(view, View):
+            shown = f"+{days}" if days > 0 else f"−{abs(days)}"
+            view.text = f"{_T['days_picked'].format(days=shown)}\n\n{view.text}"
+        return view
+
+    # ------------------------------------------------------------ lists: new, paid, banned
+
+    def _list_view(self, screen: str, hint: str, items: Sequence[tuple[int, str]]) -> View:
+        rows = [[nav_button(label[:64], SCREEN_CARD, arg=str(uid))] for uid, label in items]
+        rows.append([nav_button(_T["b_find"], SCREEN_FIND)])
+        rows.append(self._back_row())
+        crumb = f"🛠 Админка › 👥 Пользователи › <b>{_TITLES[screen]}</b>"
+        body = hint if items else f"{hint}\n\n{_T['list_empty']}"
+        return View(text=f"{crumb}\n\n{body}", parse_mode="HTML", keyboard=rows)
+
+    @staticmethod
+    def _person(first_name: str | None, username: str | None) -> str:
+        name = (first_name or "").strip()[:28] or _T["no_name"]
+        return name + (f" @{username[:28]}" if username else "")
+
+    async def _new_screen(self, ctx: ScreenCtx, _arg: Any) -> View:
+        async with self.db.read() as conn:
+            found = await queries.recent_users(conn, limit=LIST_LIMIT)
+        items = [(r.user_id, f"{self._person(r.first_name, r.username)} · {self._date(r.at)}") for r in found]
+        return self._list_view(SCREEN_NEW, _T["new_hint"], items)
+
+    async def _paid_screen(self, ctx: ScreenCtx, _arg: Any) -> View:
+        async with self.db.read() as conn:
+            found = await queries.recent_payers(conn, limit=LIST_LIMIT)
+        items = [
+            (
+                r.user_id,
+                f"{self._short_dt(r.at)} · {self._person(r.first_name, r.username)} · "
+                f"{self._fmt_money(r.amount_minor or 0, r.currency)}",
+            )
+            for r in found
+        ]
+        return self._list_view(SCREEN_PAID, _T["paid_hint"], items)
+
+    async def _banned_screen(self, ctx: ScreenCtx, _arg: Any) -> View:
+        async with self.db.read() as conn:
+            found = await queries.banned_users(conn, limit=LIST_LIMIT)
+        items = [
+            (r.user_id, f"{self._person(r.first_name, r.username)} · с {self._date(r.at)}") for r in found
+        ]
+        return self._list_view(SCREEN_BANNED, _T["ban_hint"], items)
+
+    def _short_dt(self, value: datetime | None) -> str:
+        return "—" if value is None else value.astimezone(self._tz()).strftime("%d.%m %H:%M")
 
     # ------------------------------------------------------------ actions → forms
 

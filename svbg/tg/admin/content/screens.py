@@ -66,6 +66,7 @@ from svbg.content.model import (
     parse_action,
 )
 from svbg.services.roles import DENIED, load_actor
+from svbg.tg.admin import nav
 from svbg.tg.admin.content.telegram import (
     DOWNLOAD_LIMIT,
     TransportProbeSender,
@@ -577,7 +578,7 @@ class ContentScreens:
     # ------------------------------------------------------------ home & list
 
     def entry_button(self, user: UserCtx) -> InlineKeyboardButton:
-        """«✏️ Конструктор» for the admin home (``svbg.tg.admin.dashboard``)."""
+        """«✏️ Конструктор» as a button (the admin's «🎨 Оформление» links ``ce.home`` directly)."""
         on = self.edit_mode.is_on(user)
         return nav_button("✏️ Конструктор" + (" · вкл" if on else ""), SCREEN_HOME)
 
@@ -625,7 +626,7 @@ class ContentScreens:
         if banner_free:
             banner_row.append(nav_button(_T["banner_on"], ACTIONS, "bnr"))
         rows += [[b] for b in banner_row]
-        rows.append([nav_button("🏠 Меню", defaults.HOME)])
+        rows.append(nav.back_row(SCREEN_HOME))
         return View(text=text, keyboard=rows)
 
     async def _list_screen(self, ctx: ScreenCtx, arg: Any) -> View:

@@ -68,6 +68,7 @@ from aiogram.exceptions import (
     TelegramForbiddenError,
     TelegramMigrateToChat,
     TelegramNetworkError,
+    TelegramNotFound,
     TelegramRetryAfter,
     TelegramServerError,
 )
@@ -81,6 +82,7 @@ from aiogram.methods import (
     GetForumTopicIconStickers,
     ReopenForumTopic,
     SendMessage,
+    SendRichMessage,
     TelegramMethod,
 )
 from aiogram.types import (
@@ -99,6 +101,7 @@ from svbg.core.errors.report import format_duration_ru, plural_ru, utf16_len
 from svbg.core.log import mask
 from svbg.services.tables import TOPIC_FALLBACKS, admin_cards, admin_topics
 from svbg.tg.notifier import TRANSPORT_ERRORS, NotifierError, Priority
+from svbg.tg.report import Report, RichGate, banner_media
 from svbg.tg.runner import BotUnavailableError
 
 if TYPE_CHECKING:
@@ -187,6 +190,7 @@ _MESSAGE_GONE: Final = (
     "message_id_invalid",
     "message can't be edited",
     "message not found",
+    "there is no text in the message to edit",
 )
 _NOT_MODIFIED: Final = "message is not modified"
 
@@ -411,6 +415,16 @@ class _MessageGone(_Failure):
     pass
 
 
+class _RichRejected(_Failure):
+    """Telegram refused a rich message (old server, a block it does not take, no media rights).
+
+    ``unsupported``: the server has no such method at all, rich is off for every chat."""
+
+    def __init__(self, human: str, *, unsupported: bool = False) -> None:
+        super().__init__(human)
+        self.unsupported = unsupported
+
+
 class _NotModified(_Failure):
     pass
 
@@ -441,6 +455,7 @@ class _Item:
     to_dm: bool = False  # the group failed permanently for it: deliver to the owners' DMs
     dm_reason: str | None = None
     stuck_since: float | None = None  # first transient failure of this item
+    report: Report | None = None  # sent as a rich message when the chat takes them, else ``text`` (its HTML)
 
     def abandoned(self) -> bool:
         return not self.detached and bool(self.futures) and all(f.done() for f in self.futures)
@@ -488,6 +503,11 @@ class _Window:
 
     def take(self, now: float) -> None:
         self.stamps.append(now)
+
+    def give_back(self) -> None:
+        """Undo the last :meth:`take`: the request never reached the chat."""
+        if self.stamps:
+            self.stamps.pop()
 
 
 def _esc(text: str) -> str:
@@ -629,6 +649,7 @@ class AdminChatService:
         self._busy = False
         self._closed = False
 
+        self._rich = RichGate(clock=clock)
         self._cards: OrderedDict[tuple[str, str], _Card] = OrderedDict()
         self._moved: OrderedDict[tuple[int, int], tuple[int, int]] = OrderedDict()
         self._fail_streak = 0
@@ -766,6 +787,7 @@ class AdminChatService:
         card_ref: str | None = None,
         silent: bool | None = None,
         wait: bool = False,
+        report: Report | None = None,
     ) -> PostResult | None:
         """Queue a notification for topic ``kind``.
 
@@ -797,9 +819,35 @@ class AdminChatService:
             card=(kind, card_ref) if card_ref is not None else None,
             created=self._clock(),
             key=f"card:{kind}:{card_ref}" if card_ref is not None else None,
+            report=report if html and not entities else None,
         )
         self.stats["posted"] += 1
         return await self._submit(item, wait)
+
+    async def post_report(
+        self,
+        kind: str,
+        report: Report,
+        *,
+        buttons: Keyboard | None = None,
+        priority: Priority | None = None,
+        card_ref: str | None = None,
+        silent: bool | None = None,
+        wait: bool = False,
+    ) -> PostResult | None:
+        """Queue a :class:`~svbg.tg.report.Report`: a rich message (tables, banner) where the chat takes
+        them, its HTML text otherwise. Digests and logs quote the HTML text."""
+        return await self.post(
+            kind,
+            report.html(),
+            html=True,
+            buttons=buttons,
+            priority=priority,
+            card_ref=card_ref,
+            silent=silent,
+            wait=wait,
+            report=report,
+        )
 
     async def edit(
         self,
@@ -871,6 +919,7 @@ class AdminChatService:
             pending = self._by_key.get(item.key)
             if pending is not None:  # replace the content of the waiting item, keep its place in the queue
                 pending.text, pending.html, pending.entities = item.text, item.html, item.entities
+                pending.report = item.report
                 pending.markup, pending.silent = item.markup, item.silent
                 pending.futures.extend(item.futures)
                 pending.detached = pending.detached or item.detached
@@ -1171,8 +1220,8 @@ class AdminChatService:
         if header is not None:
             text, entities = _with_header(text, item.html, entities, header)
         if item.card is not None:
-            return await self._deliver_card(item, chat_id, target, text, entities)
-        return await self._send_topic(item, chat_id, target, text, entities)
+            return await self._deliver_card(item, chat_id, target, text, entities, header=header)
+        return await self._send_topic(item, chat_id, target, text, entities, header=header)
 
     async def _send_topic(
         self,
@@ -1181,9 +1230,27 @@ class AdminChatService:
         target: TopicDef | None,
         text: str,
         entities: list[MessageEntity] | None,
+        *,
+        header: str | None = None,
     ) -> PostResult:
         for heal in range(2):
             thread = await self._thread(chat_id, target)
+            try:
+                msg = await self._send_rich(item, chat_id, thread, header)
+            except _ThreadGone:
+                if target is None or heal:
+                    raise _Failure(_TXT["f_gone_again"]) from None
+                await self._recreate(chat_id, target)
+                continue
+            if msg is not None:
+                self.stats["sent"] += 1
+                return PostResult(
+                    item.kind,
+                    chat_id=chat_id,
+                    message_id=msg.message_id,
+                    thread_id=thread,
+                    digest=item.digest,
+                )
             method = SendMessage(
                 chat_id=chat_id,
                 text=text,
@@ -1218,6 +1285,8 @@ class AdminChatService:
         target: TopicDef | None,
         text: str,
         entities: list[MessageEntity] | None,
+        *,
+        header: str | None = None,
     ) -> PostResult:
         assert item.card is not None
         card = await self._card_get(item.card)
@@ -1226,6 +1295,14 @@ class AdminChatService:
             same = PostResult(item.kind, chat_id=chat_id, message_id=card.msg_id, thread_id=card.thread_id)
             if card.digest == digest:
                 return same
+            try:
+                if await self._edit_rich(item, chat_id, card.msg_id, header):
+                    await self._card_put(item.card, chat_id, card.msg_id, card.thread_id, digest)
+                    return same
+            except _MessageGone:
+                result = await self._send_topic(item, chat_id, target, text, entities, header=header)
+                await self._card_put(item.card, chat_id, result.message_id, result.thread_id, digest)
+                return result
             method = EditMessageText(
                 chat_id=chat_id,
                 message_id=card.msg_id,
@@ -1246,9 +1323,73 @@ class AdminChatService:
             if card is not None:
                 await self._card_put(item.card, chat_id, card.msg_id, card.thread_id, digest)
                 return same
-        result = await self._send_topic(item, chat_id, target, text, entities)
+        result = await self._send_topic(item, chat_id, target, text, entities, header=header)
         await self._card_put(item.card, chat_id, result.message_id, result.thread_id, digest)
         return result
+
+    # ------------------------------------------------------------------ rich messages
+
+    async def _rich_message(self, item: _Item, chat_id: int, header: str | None, *, banner: bool) -> Any:
+        """The item's report as ``InputRichMessage``; ``None``: no report, rich is off there, or too big."""
+        report = item.report
+        if report is None or not self._rich.ok(chat_id):
+            return None
+        file_id = None
+        if banner and self._rich.banner_ok(chat_id):
+            file_id = await banner_media(self._holder.get())
+        try:
+            return report.rich(banner=file_id, header=header)
+        except ValueError:  # past the rich limits: the HTML text goes instead
+            return None
+
+    async def _send_rich(
+        self, item: _Item, chat_id: int, thread: int | None, header: str | None
+    ) -> Message | None:
+        """Send the report as a rich message; ``None``: send the text instead (refused or not wanted)."""
+        rich = await self._rich_message(item, chat_id, header, banner=item.card is None)
+        while rich is not None:
+            method = SendRichMessage(
+                chat_id=chat_id,
+                rich_message=rich,
+                reply_markup=item.markup,
+                message_thread_id=thread,
+                disable_notification=item.silent or None,
+            )
+            try:
+                return await self._call(method, chat_id, item.priority, rich=True)
+            except _RichRejected as exc:
+                if exc.unsupported:
+                    self._rich.off_everywhere(exc.human)
+                    return None
+                blocks = rich.blocks or []
+                if blocks and blocks[0].type == "photo":  # maybe no media rights here: once more without it
+                    self._rich.banner_off(chat_id)
+                    rich = rich.model_copy(update={"blocks": blocks[1:]})
+                    continue
+                self._rich.off(chat_id, exc.human)
+                return None
+        return None
+
+    async def _edit_rich(self, item: _Item, chat_id: int, msg_id: int, header: str | None) -> bool:
+        """Edit a card into the report's rich form; ``False``: edit it as text instead."""
+        rich = await self._rich_message(item, chat_id, header, banner=False)
+        if rich is None:
+            return False
+        method = EditMessageText(
+            chat_id=chat_id, message_id=msg_id, rich_message=rich, parse_mode=None, reply_markup=item.markup
+        )
+        try:
+            await self._call(method, chat_id, item.priority, rich=True)
+        except _NotModified:
+            return True
+        except _RichRejected as exc:
+            if exc.unsupported:
+                self._rich.off_everywhere(exc.human)
+            else:
+                self._rich.off(chat_id, exc.human)
+            return False
+        self.stats["edited"] += 1
+        return True
 
     async def _deliver_edit(self, item: _Item) -> PostResult | None:
         assert item.edit is not None
@@ -1289,7 +1430,7 @@ class AdminChatService:
             text, entities = item.text, item.entities
             if header is not None:
                 text, entities = _with_header(text, item.html, entities, header)
-            result = await self._send_topic(item, self._chat_id, target, text, entities)
+            result = await self._send_topic(item, self._chat_id, target, text, entities, header=header)
         except _Failure as failure:
             if failure.transient:
                 raise
@@ -1302,7 +1443,9 @@ class AdminChatService:
             self._moved.popitem(last=False)
         return result
 
-    async def _call(self, method: TelegramMethod[T], chat_id: int, priority: Priority) -> T:
+    async def _call(
+        self, method: TelegramMethod[T], chat_id: int, priority: Priority, *, rich: bool = False
+    ) -> T:
         """Run a chat-bound method through the notifier, translating failures into :class:`_Failure`.
 
         Every request to a group (messages, edits, topic management) takes a slot of our window, which
@@ -1321,11 +1464,19 @@ class AdminChatService:
                 raise _NotModified("not modified") from None
             if any(s in desc for s in _MESSAGE_GONE):
                 raise _MessageGone("message gone") from None
+            if rich:  # whatever it is, the plain text may still pass
+                raise _RichRejected(mask(exc.message or "")[:120]) from None
             raise _Failure(_human_bad_request(exc.message or "")) from None
         except TelegramMigrateToChat as exc:
             raise _Failure(_TXT["migrated"].format(chat_id=exc.migrate_to_chat_id)) from None
         except _TRANSIENT_ERRORS as exc:
             raise _transient_reason(exc) from None
+        except TelegramNotFound as exc:
+            if rich:  # an older Bot API server without rich messages: nothing reached the chat
+                if chat_id < 0:
+                    self._window.give_back()
+                raise _RichRejected("method not found", unsupported=True) from None
+            raise _Failure(_TXT["f_api"].format(name=type(exc).__name__)) from None
         except TelegramAPIError as exc:
             raise _Failure(_TXT["f_api"].format(name=type(exc).__name__)) from None
         if result is None:  # 403: the bot was kicked or may not write
@@ -1352,6 +1503,32 @@ class AdminChatService:
         refs: dict[int, int] = {}
         transient: _Failure | None = None
         for owner in owners:
+            rich = await self._rich_message(item, owner, header, banner=True)
+            if rich is not None:
+                try:
+                    msg = await self._notifier.call(
+                        SendRichMessage(
+                            chat_id=owner,
+                            rich_message=rich,
+                            reply_markup=item.markup,
+                            disable_notification=item.silent or None,
+                        ),
+                        chat_id=owner,
+                        priority=item.priority,
+                    )
+                except TelegramNotFound as exc:
+                    self._rich.off_everywhere(exc.message or type(exc).__name__)
+                except TelegramBadRequest as exc:
+                    self._rich.off(owner, exc.message or type(exc).__name__)
+                except _SEND_ERRORS as exc:
+                    log.warning("admin chat: owner DM failed: %s", type(exc).__name__)
+                    if isinstance(exc, _TRANSIENT_ERRORS) and transient is None:
+                        transient = _transient_reason(exc)
+                    continue
+                else:
+                    if isinstance(msg, Message):
+                        refs[owner] = msg.message_id
+                    continue
             method = SendMessage(
                 chat_id=owner,
                 text=text,

@@ -10,7 +10,15 @@ from typing import Any
 import pytest
 
 from svbg.core import clock
-from svbg.ops.daily_report import AdminMoney, DailyReport, ReportData, RevenueLine, collect, render
+from svbg.ops.daily_report import (
+    AdminMoney,
+    DailyReport,
+    ReportData,
+    RevenueLine,
+    build_report,
+    collect,
+    render,
+)
 from svbg.ops.state import K_REPORT, MetaState
 from svbg.ops.timing import day_window, due_today, today_window, zone_of
 from tests.dbkit import CountingDatabase
@@ -28,8 +36,8 @@ def _t(hours: float) -> datetime:
 class Posts:
     items: list[tuple[str, Any]] = field(default_factory=list)
 
-    async def __call__(self, text: str, buttons: Sequence[Sequence[Any]] | None) -> None:
-        self.items.append((text, buttons))
+    async def __call__(self, report: Any, buttons: Sequence[Sequence[Any]] | None) -> None:
+        self.items.append((report.html(), buttons))
 
 
 @pytest.fixture
@@ -193,23 +201,56 @@ async def test_render(db: CountingDatabase) -> None:
     start, end, day = day_window(NOW, MSK)
     text = render(await collect(db, start, end, day, partial=False), currency="RUB", tz_name="Europe/Moscow")
     nb = "\N{NO-BREAK SPACE}"
-    assert text.startswith("📊 <b>Отчёт за 1 октября</b>")
-    assert f"💰 Выручка: <b>398{nb}₽ + 250{nb}⭐</b> · оплат: 3" in text
-    assert f"RollyPay — 398{nb}₽ · 2" in text
-    assert "Telegram &lt;Stars&gt;" in text, "titles are escaped"
-    assert "🛒 Покупок: 4 (новых 2, продлений 1, других 1)" in text
-    assert "👤 Новых пользователей: 3" in text
-    assert "🎁 Триалов: 1 · купили после триала: 1" in text
-    assert "📦 Активных подписок: 2" in text
-    assert f"@boss — 2 · +300{nb}₽" in text and "🛠 Вручную (админы): 3" in text
+    assert text == (
+        "📊 <b>Отчёт за 1 октября</b>\n\n"
+        f"Выручка: <b>398{nb}₽ + 250{nb}⭐</b>\n"
+        "Оплат: <b>3</b>\n"
+        "Покупок: <b>4</b> (новых 2, продлений 1, других 1)\n"
+        "Новых пользователей: <b>3</b>\n"
+        "Триалов: <b>1</b>, купили после триала 1\n"
+        "Активных подписок: <b>2</b>\n\n"
+        "<b>По кассам</b>\n"
+        "<pre>Касса            Оплат  Сумма\n"
+        "──────────────── ───── ──────\n"
+        f"RollyPay             2  398{nb}₽\n"
+        f"Telegram &lt;Stars&gt;     1 250{nb}⭐</pre>\n\n"
+        "<b>Выдано вручную: 3</b>\n"
+        "<pre>Админ   Шт Итог\n"
+        "─────── ── ──────\n"
+        f"@boss    2 +300{nb}₽\n"
+        f"система  1 +10{nb}₽</pre>\n\n"
+        "<i>по времени Europe/Moscow</i>"
+    ), "titles are escaped, tables fit a phone"
 
 
 def test_render_empty_and_partial() -> None:
     data = ReportData(NOW, NOW, date(2026, 10, 2), partial=True, admin_money=[AdminMoney("@x", 1, -500)])
     text = render(data, currency="RUB", tz_name="Europe/Moscow")
-    assert text.startswith("📊 <b>Отчёт за сегодня, 2 октября</b> (до 09:00)")
-    assert "оплат не было" in text and "🛒 Покупок: 0\n" in text
-    assert "@x — 1 · −5\N{NO-BREAK SPACE}₽" in text
+    assert text.startswith("📊 <b>Отчёт за сегодня, 2 октября</b>")
+    assert text.endswith("<i>данные до 09:00, Europe/Moscow</i>")
+    assert "Выручка: <b>оплат не было</b>" in text and "Покупок: <b>0</b>\n" in text
+    assert "@x     1 −5\N{NO-BREAK SPACE}₽" in text
+
+
+def test_rich_report_has_tables() -> None:
+    data = ReportData(
+        NOW,
+        NOW,
+        date(2026, 10, 1),
+        partial=False,
+        revenue=[RevenueLine("RollyPay", "RUB", 1234500, 2), RevenueLine("Карта", "RUB", 100, 1)],
+    )
+    rich = build_report(data, currency="RUB", tz_name="Europe/Moscow").rich()
+    blocks = rich.model_dump(mode="json", exclude_none=True)["blocks"]
+    assert [b["type"] for b in blocks] == ["heading", "table", "heading", "table", "footer"]
+    kassa = blocks[3]
+    assert kassa["is_compact"] is True and kassa["is_striped"] is True
+    head, first, _, total = kassa["cells"]
+    assert [c["text"] for c in head] == ["Касса", "Оплат", "Сумма"] and all(c["is_header"] for c in head)
+    assert [c["align"] for c in first] == ["left", "right", "right"]
+    assert all(c["valign"] == "middle" for c in first)
+    assert first[2]["text"] == "12\N{NARROW NO-BREAK SPACE}345\N{NO-BREAK SPACE}₽"
+    assert total[0]["text"] == {"type": "bold", "text": "Итого"}
 
 
 @pytest.mark.pg
@@ -262,9 +303,9 @@ async def test_missed_moment_and_disabled(db: CountingDatabase, frozen: clock.Fr
 async def test_build_today_so_far(db: CountingDatabase, frozen: clock.FrozenClock) -> None:
     await seed_day(db)
     report = DailyReport(db, settings=lambda: {}, post=Posts())
-    text = await report.build(partial=True)
-    assert "Отчёт за сегодня, 2 октября" in text and "(до 09:00)" in text
-    assert "👤 Новых пользователей: 1" in text, "the user created after midnight in Moscow"
+    text = (await report.build(partial=True)).html()
+    assert "Отчёт за сегодня, 2 октября" in text and "данные до 09:00" in text
+    assert "Новых пользователей: <b>1</b>" in text, "the user created after midnight in Moscow"
 
 
 @pytest.mark.pg
@@ -298,9 +339,9 @@ async def test_admin_gifts_without_an_amount_are_reported(db: CountingDatabase) 
     ]
     text = render(data, currency="RUB", tz_name="Europe/Moscow")
     nb = "\N{NO-BREAK SPACE}"
-    assert "🛠 Вручную (админы): 7" in text
-    assert f"@boss — 5 · +100{nb}₽ · +32{nb}дн." in text
-    assert f"@helper — 2 · +10{nb}ГБ · промокодов 1" in text and "₽ · +10" not in text
+    assert "<b>Выдано вручную: 7</b>" in text
+    assert f"@boss    5 +100{nb}₽ · +32{nb}дн." in text
+    assert f"@helper  2 +10{nb}ГБ · промокодов 1" in text and "₽ · +10" not in text
 
 
 @dataclass
@@ -320,11 +361,11 @@ class Attention:
 class FlakyPost(Posts):
     failures: int = 0
 
-    async def __call__(self, text: str, buttons: Sequence[Sequence[Any]] | None) -> None:
+    async def __call__(self, report: Any, buttons: Sequence[Sequence[Any]] | None) -> None:
         if self.failures > 0:
             self.failures -= 1
             raise ConnectionError("telegram 502")
-        await super().__call__(text, buttons)
+        await super().__call__(report, buttons)
 
 
 @pytest.mark.pg

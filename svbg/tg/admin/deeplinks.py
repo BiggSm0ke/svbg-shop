@@ -43,6 +43,7 @@ from svbg.deeplinks.codec import Kind
 from svbg.deeplinks.hook import from_app, router_can_open
 from svbg.deeplinks.model import Intent, IntentError
 from svbg.deeplinks.service import Actor, DeeplinkService, LinkRow, LinkStats, describe
+from svbg.tg.admin import nav as admin_nav
 from svbg.tg.ui.context import UserCtx
 from svbg.tg.ui.forms import Field, Form, ValidationError, integer
 from svbg.tg.ui.forms import text as text_validator
@@ -116,7 +117,7 @@ _T: Final[dict[str, str]] = {
     "list_empty": "Ссылок пока нет.",
     "list_page": "Стр. {page} из {pages}",
     "new": "➕ Новая ссылка",
-    "menu": "🏠 Меню",
+    "settings": "⚙️ Настройки ссылок",
     "back": "⬅️ Назад",
     "prev": "◀️",
     "next": "▶️",
@@ -460,7 +461,11 @@ class LinkBuilder:
                 nav.append(nav_button(_T["next"], SCREEN_LIST, arg=str(offset + PAGE)))
             keyboard.append(nav)
         keyboard.append([nav_button(_T["new"], ACTIONS, "new", style="success")])
-        keyboard.append([nav_button(_T["menu"], HOME)])
+        if admin_nav.has_screen(self.router, "set.v") and (
+            ctx.user.role == "owner" or ctx.user.has_perm("settings.business")
+        ):
+            keyboard.append([nav_button(_T["settings"], "set.v", arg="m.links")])
+        keyboard.append(admin_nav.back_row(SCREEN_LIST))
         return View(text="\n\n".join(lines), parse_mode="HTML", keyboard=keyboard)
 
     # ------------------------------------------------------------ target

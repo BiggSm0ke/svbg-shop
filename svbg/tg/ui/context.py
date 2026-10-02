@@ -59,6 +59,7 @@ class UserCtx:
     # Extensions over the stage-0 contract (defaults keep the original constructor valid):
     segments: frozenset[str] = frozenset()  # tags for the ``segment:<tag>`` condition atom
     currency: str = "RUB"  # shop currency used by the ``{balance}`` placeholder
+    captcha_passed: bool = True  # ``users.captcha_passed_at`` is set (svbg.tg.user.captcha)
     _placeholders: dict[str, str] | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:

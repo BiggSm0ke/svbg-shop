@@ -19,6 +19,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import (
     AnswerCallbackQuery,
     CreateInvoiceLink,
+    EditMessageMedia,
     EditMessageText,
     SendMessage,
     SendPhoto,
@@ -162,6 +163,19 @@ class Tg:
                 )
             self.messages[key] = Shown(key[1], key[0], method.text, method.reply_markup)  # type: ignore[arg-type]
             return True
+        if isinstance(method, EditMessageMedia):  # a text message becomes a picture in place
+            key = (int(method.chat_id or 0), int(method.message_id or 0))
+            if key not in self.messages:
+                raise TelegramBadRequest(method=method, message="Bad Request: message to edit not found")
+            caption = method.media.caption or ""
+            self.messages[key] = Shown(key[1], key[0], caption, method.reply_markup, True)  # type: ignore[arg-type]
+            return Message(
+                message_id=key[1],
+                date=DATE,
+                chat=Chat(id=key[0], type="private"),
+                photo=[PhotoSize(file_id="qr", file_unique_id="u", width=1, height=1)],
+                caption=caption,
+            )
         return True
 
     def shown(self, chat_id: int, message_id: int) -> Shown:
@@ -311,6 +325,7 @@ DEFAULT_USER_CONFIG: dict[str, Any] = {
     "DEFAULT_LANGUAGE": "ru",
     "TIMEZONE": "Europe/Moscow",
     "WALLET_TOPUP_PRESETS": [179, 499, 899],
+    "CAPTCHA_ENABLED": False,  # the entry captcha has its own tests (test_user_captcha.py)
 }
 
 

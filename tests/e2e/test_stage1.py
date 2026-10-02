@@ -106,6 +106,10 @@ async def until_async(predicate: Callable[[], Any], timeout: float = 10.0, what:
         await asyncio.sleep(0.05)
 
 
+#: Calls that put something on the screen (the default banner turns texts into photos with captions).
+SHOWN = ("sendMessage", "sendPhoto", "editMessageText", "editMessageCaption", "editMessageMedia")
+
+
 class Chat:
     """The owner's private chat as Telegram shows it: what the bot sent/edited, buttons to press."""
 
@@ -119,21 +123,21 @@ class Chat:
             c
             for c in self.tg.calls[start:]
             if c.ok
-            and c.method in ("sendMessage", "editMessageText")
+            and c.method in SHOWN
             and c.params.get("chat_id") == self.user_id
         ]
 
     @property
     def text(self) -> str:
         shown = self.visible()
-        return str(shown[-1].params["text"]) if shown else ""
+        return str(shown[-1].text) if shown else ""
 
     def all_text(self) -> str:
-        return "\n".join(str(c.params.get("text")) for c in self.visible())
+        return "\n".join(c.text for c in self.visible())
 
     @staticmethod
     def message_id(call: Call) -> int:
-        if call.method == "sendMessage":
+        if call.method in ("sendMessage", "sendPhoto"):
             return int(call.result["message_id"])
         return int(call.params["message_id"])
 
@@ -145,7 +149,7 @@ class Chat:
 
     async def wait_text(self, needle: str, *, start: int = 0, timeout: float = 15.0) -> Call:
         return await until(
-            lambda: next((c for c in reversed(self.visible(start)) if needle in str(c.params["text"])), None),
+            lambda: next((c for c in reversed(self.visible(start)) if needle in str(c.text)), None),
             timeout,
             f"text {needle!r} in the owner chat (last: {self.text[:300]!r})",
         )
@@ -190,7 +194,7 @@ def group_sends(tg: FakeTelegram, thread_id: int | None = None) -> list[Call]:
         c
         for c in tg.calls
         if c.ok
-        and c.method == "sendMessage"
+        and c.method in ("sendMessage", "sendPhoto")
         and c.params.get("chat_id") == GROUP
         and (thread_id is None or c.params.get("message_thread_id") == thread_id)
     ]
@@ -232,7 +236,7 @@ async def test_status_screen_shows_panel_queue_and_maintenance(
     owner = Chat(app_env.tg)
     shown = await owner.say("/status", expect="Состояние")
     assert shown is not None
-    text = str(shown.params["text"])
+    text = str(shown.text)
     assert "Компоненты" in text and "Панель 3.4.4" in text
     assert "Работает" in text  # uptime from AppDeps.started_at
     labels = [label for label, _ in Chat.buttons(shown)]
@@ -243,7 +247,7 @@ async def test_status_screen_shows_panel_queue_and_maintenance(
     start = len(app_env.tg.calls)
     await stranger.say("/status")
     await asyncio.sleep(0.5)
-    assert not [c for c in stranger.visible(start) if "Состояние" in str(c.params.get("text"))]
+    assert not [c for c in stranger.visible(start) if "Состояние" in c.text]
 
 
 # ------------------------------------------------------------------------------------- wizard from scratch
@@ -264,7 +268,7 @@ async def test_wizard_from_scratch_panel_admin_group_webhooks_done(
     await owner.say(panel.url, expect="API-токен")
     await owner.say(token)
     done = await owner.wait_text("✅ Подключено", timeout=20)
-    assert "Панель 3.4.4" in done.params["text"]
+    assert "Панель 3.4.4" in done.text
     deletes = tg.calls_for("deleteMessage")
     assert len({c.params["message_id"] for c in deletes if c.params.get("chat_id") == OWNER_ID}) >= 2
     assert token not in owner.all_text()
@@ -314,7 +318,7 @@ async def test_wizard_from_scratch_panel_admin_group_webhooks_done(
     start = len(tg.calls)
     tg.push_callback(OWNER_ID, encode("setup.wiz", "o", "ready"), owner.message_id(owner.visible()[-1]))
     ready = await owner.wait_text("Готовность", start=start)
-    text = str(ready.params["text"])
+    text = str(ready.text)
     assert "✅ Remnawave: Панель 3.4.4" in text
     assert "✅ Админ-группа" in text
     assert "✅ Первое событие вебхука получено" in text
@@ -346,8 +350,8 @@ async def test_wrong_panel_token_gives_clear_error_and_old_connection_keeps_work
     await owner.say(panel.url, expect="API-токен")
     await owner.say(bad)
     failed = await owner.wait_text("❌ Не подключено", timeout=20)
-    assert "Прежнее подключение продолжает работать" in failed.params["text"]
-    assert "токен" in failed.params["text"].lower()
+    assert "Прежнее подключение продолжает работать" in failed.text
+    assert "токен" in failed.text.lower()
     assert "eyJ1dWlkIjoid3JvbmcifQ" not in owner.all_text()
 
     # Through the settings pipeline (the «⚙️ Настройки» screen and the .env mirror use the same path).
@@ -569,15 +573,15 @@ async def test_handler_errors_go_to_the_errors_topic_once_with_a_counter(
     start = len(tg.calls)
     tg.push_callback(user, encode("stage1boom", arg="fail"), msg_id)
     report = await tg.wait_for(
-        "sendMessage",
-        lambda c: c.ok and c.params.get("chat_id") == GROUP and "Boom" in str(c.params.get("text")),
+        "sendMessage|sendPhoto",
+        lambda c: c.ok and c.params.get("chat_id") == GROUP and "Boom" in c.text,
         timeout=20,
         start=start,
     )
     errors_thread = await topic_thread(app, "errors")
     assert report.params.get("message_thread_id") == errors_thread
-    assert "<blockquote expandable>" in report.params["text"]
-    assert app_env.token.split(":")[1] not in report.params["text"]
+    assert "<blockquote expandable>" in report.text
+    assert app_env.token.split(":")[1] not in report.text
     labels = [b["text"] for row in report.params["reply_markup"]["inline_keyboard"] for b in row]
     assert any("Заглушить" in t for t in labels) and any("Состояние" in t for t in labels)
     assert not [c for c in tg.calls if c.params.get("chat_id") == OWNER_ID and "Boom" in str(c.params)]
@@ -592,12 +596,12 @@ async def test_handler_errors_go_to_the_errors_topic_once_with_a_counter(
     def counted() -> bool:
         return any(
             c.ok and c.params.get("chat_id") == GROUP and c.params.get("message_id") == report_id
-            and "×50" in str(c.params.get("text"))
+            and "×50" in c.text
             for c in tg.calls_for("editMessageText")
         )  # fmt: skip
 
     await until(counted, timeout=30, what="report edited to ×50")
-    boom_sends = [c for c in group_sends(tg) if "Boom" in str(c.params.get("text"))]
+    boom_sends = [c for c in group_sends(tg) if "Boom" in c.text]
     assert len(boom_sends) == 1, "50 identical exceptions give ONE message"
 
 
@@ -691,8 +695,8 @@ async def test_import_users_of_the_panel_dry_run_apply_and_again(
     assert len(await db.raw("select 1 from subscriptions")) == 11
     # No admin chat: the owner gets the summary in DM.
     await tg.wait_for(
-        "sendMessage",
-        lambda c: c.params.get("chat_id") == OWNER_ID and "Импорт из панели" in str(c.params.get("text")),
+        "sendMessage|sendPhoto",
+        lambda c: c.params.get("chat_id") == OWNER_ID and "Импорт из панели" in c.text,
         timeout=10,
     )
 

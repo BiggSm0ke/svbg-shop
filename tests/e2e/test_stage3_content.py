@@ -19,7 +19,7 @@ from svbg.app import App
 from svbg.boot.envfile import EnvDocument, write_atomic
 from svbg.content.banner import banner_sha256
 from svbg.core.crypto import generate_key
-from tests.e2e.conftest import OWNER_ID, AppEnv, StartApp, apply_sql, schema_sql
+from tests.e2e.conftest import CAPTCHA_OFF_SQL, OWNER_ID, AppEnv, StartApp, apply_sql, schema_sql
 from tests.e2e.test_stage2_kit import FAST, open_shop, until
 from tests.e2e.test_stage3_kit import (  # noqa: F401 - the ``tg`` fixture
     EMOJI,
@@ -108,6 +108,7 @@ async def _second_install(pg_cluster: PgCluster, app_env: AppEnv, tmp_path: Path
     """A clean install: a new database with the migrated schema, another bot token, another data dir."""
     dsn = await create_database(pg_cluster, CLEAN_DB)
     await apply_sql(dsn, schema_sql())
+    await apply_sql(dsn, CAPTCHA_OFF_SQL)
     data = tmp_path / "clean"
     token = app_env.tg.add_bot(username="svbg_clean_bot")
     env = AppEnv(

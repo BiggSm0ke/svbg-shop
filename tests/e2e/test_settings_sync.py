@@ -103,11 +103,11 @@ async def test_invalid_file_edit_is_annotated_and_reported(start_app: StartApp, 
     await _poll(lambda: "⚠" in app_env.env_path.read_text(encoding="utf-8"), 4.0)
     assert app.settings.current()["TRIAL_DAYS"] == 3
     notice = await app_env.tg.wait_for(
-        "sendMessage",
-        lambda c: c.params.get("chat_id") == OWNER_ID and "TRIAL_DAYS" in c.params["text"],
+        "sendMessage|sendPhoto",
+        lambda c: c.params.get("chat_id") == OWNER_ID and "TRIAL_DAYS" in c.text,
         timeout=5,
     )
-    assert "не применено" in notice.params["text"]
+    assert "не применено" in notice.text
 
 
 async def test_owner_set_command_reaches_file_within_1s(start_app: StartApp, app_env: AppEnv) -> None:
@@ -129,10 +129,7 @@ async def test_owner_set_command_reaches_file_within_1s(start_app: StartApp, app
     await asyncio.sleep(0.5)
     assert app.settings.current()["TRIAL_DAYS"] == 8
     assert _file_value(app_env, "TRIAL_DAYS") == "8"
-    assert all(
-        c.params.get("chat_id") != 12345 or "Применено" not in str(c.params.get("text"))
-        for c in tg.calls[start:]
-    )
+    assert all(c.params.get("chat_id") != 12345 or "Применено" not in c.text for c in tg.calls[start:])
 
 
 async def test_owner_opens_settings_screen(start_app: StartApp, app_env: AppEnv) -> None:
@@ -141,5 +138,7 @@ async def test_owner_opens_settings_screen(start_app: StartApp, app_env: AppEnv)
         pytest.skip("settings screens are not installed")
     tg = app_env.tg
     tg.push_message(OWNER_ID, "/settings")
-    call = await tg.wait_for("sendMessage", lambda c: c.params.get("chat_id") == OWNER_ID, timeout=10)
-    assert "Настройки" in call.params["text"]
+    call = await tg.wait_for(
+        "sendMessage|sendPhoto", lambda c: c.params.get("chat_id") == OWNER_ID, timeout=10
+    )
+    assert "Все настройки" in call.text

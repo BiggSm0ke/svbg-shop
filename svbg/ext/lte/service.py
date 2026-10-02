@@ -1426,8 +1426,9 @@ class LteService:
                 await self.enforcer.raise_unenforceable(applied.unenforceable)
             cfg = self.cfg()
             if applied is not None and cfg.card_blocks and applied.placed:
-                texts = [
-                    notify.CARD_T["block"].format(
+                cards = [
+                    notify.card_report(
+                        "block",
                         sid=b.subscription_id,
                         used=notify.fmt_gb(b.used_bytes, cfg.gb_bytes),
                         limit=notify.fmt_gb(b.limit_bytes, cfg.gb_bytes),
@@ -1436,7 +1437,7 @@ class LteService:
                     for b in applied.placed
                     if b.mode == "enforce"
                 ]
-                await notify.post_cards(self.admin_chat, texts)
+                await notify.post_cards(self.admin_chat, cards)
             if written is not None and written.reviews and self.attention is not None:
                 await self.attention.raise_item(
                     "lte:review",
@@ -1897,7 +1898,7 @@ class LteService:
         n = await self.enforcer.release_all(reason, due_only=due_only)
         async with self.db.tx() as conn:
             await audit(conn, actor_id, "lte.release_all", "lte", reason=reason, details={"released": n})
-        await notify.post_cards(self.admin_chat, [notify.CARD_T["release_all"].format(n=n, reason=reason)])
+        await notify.post_cards(self.admin_chat, [notify.card_report("release_all", n=n, reason=reason)])
         return n
 
     async def on_setup(self) -> None:
@@ -2072,9 +2073,9 @@ async def notify_job(job: Job, jctx: JobContext) -> None:
 async def card_job(job: Job, jctx: JobContext) -> None:
     """``lte.card``: a card for the topic «🌐 Трафик LTE», queued in a business transaction."""
     del jctx
-    text = job.payload.get("text")
-    if isinstance(text, str) and text:
-        await notify.post_cards(RUNTIME.service().admin_chat, [text[:3000]])
+    card = notify.card_from_payload(job.payload)
+    if card is not None:
+        await notify.post_cards(RUNTIME.service().admin_chat, [card])
 
 
 async def enqueue_term(conn: AsyncConnection, sid: int, *, caused_by: str | None = None) -> int | None:

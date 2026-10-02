@@ -91,7 +91,10 @@ from svbg.remnawave.sync import TICK_S, Reconciler
 from svbg.remnawave.tables import import_runs, rw_inbox
 from svbg.remnawave.transport import Lane
 from svbg.remnawave.writer import PanelWriter
+from svbg.tg import banner as banner_mod
+from svbg.tg.banner import BannerMiddleware, BannerPolicy, banner_scope
 from svbg.tg.notifier import TRANSPORT_ERRORS, Limits, Notifier, NotifierError, Priority
+from svbg.tg.report import Report, num, send_report
 from svbg.tg.runner import BotHolder, BotRunner, BotUnavailableError
 from svbg.tg.ui.codec import CallbackCodec
 from svbg.tg.ui.router import BotTransport, ScreenRouter, UiStateStore
@@ -186,10 +189,12 @@ OPTIONAL_UI_MODULES: Final[tuple[str, ...]] = (
     "svbg.tg.admin.status",
     "svbg.tg.admin.connect_chat",
     "svbg.tg.admin.plans",
-    # stage 3: admin users / roles / dashboard, constructor, broadcasts, deep links, ops
+    # stage 3: admin users / roles, the admin home and its sections (statistics, staff command menus, the
+    # search by a typed id: before svbg.support), cash desks, constructor, broadcasts, deep links, ops
     "svbg.tg.admin.users",
     "svbg.tg.admin.roles",
-    "svbg.tg.admin.dashboard",
+    "svbg.tg.admin.menu",
+    "svbg.tg.admin.payments",
     "svbg.tg.admin.content",
     "svbg.tg.admin.broadcasts",
     "svbg.tg.admin.deeplinks",
@@ -220,11 +225,20 @@ _TXT: Final = {
     "REMNAWAVE_TOKEN в .env или мастером /setup",
     "import_no_panel": "Импорт из панели невозможен: панель не подключена (REMNAWAVE_URL, REMNAWAVE_TOKEN)",
     "import_bad_mode": "Импорт из панели: неизвестный режим {mode!r} (ожидался dry_run или apply)",
-    "import_done": "📥 Импорт из панели ({mode}): пользователей панели {total}, создано подписок "
-    "{subs}, новых пользователей бота {users}, уже связаны {linked}, конфликтов {conflicts}",
+    "import_done": "Импорт из панели",
     "mode_dry_run": "проверка без записи",
     "mode_apply": "запись",
 }
+
+
+def import_summary(mode: str, report: Any) -> Report:
+    """The summary of a panel import run (``remnawave.import``) for the admin chat or the owners."""
+    rep = Report("📥", _TXT["import_done"], subtitle=_TXT.get(f"mode_{mode}", mode))
+    rep.line("Пользователей в панели", num(report.total))
+    rep.line("Создано подписок", num(report.subscriptions_created))
+    rep.line("Новых пользователей бота", num(report.users_created))
+    rep.line("Уже были связаны", num(report.already_linked))
+    return rep.line("Конфликтов", num(report.conflicts))
 
 
 class AppError(Exception):
@@ -473,7 +487,10 @@ class OwnerDmSink:
             return None
         for chat_id in sorted(owners):
             try:
-                msg = await self._notifier.send(chat_id, text, parse_mode="HTML", priority=Priority.CRITICAL)
+                with banner_scope("text"):  # the report is edited when it repeats: keep it a text message
+                    msg = await self._notifier.send(
+                        chat_id, text, parse_mode="HTML", priority=Priority.CRITICAL
+                    )
             except (TelegramAPIError, NotifierError, BotUnavailableError, *TRANSPORT_ERRORS) as exc:
                 log.warning("error report to an owner failed: %s", type(exc).__name__)
                 continue
@@ -674,6 +691,7 @@ class App:
         self.scheduler: Scheduler | None = None
         self.job_handlers: dict[str, Handler] = {}
         self.screens: ScreenRouter | None = None
+        self.banner: BannerPolicy | None = None
         self.dispatcher: Dispatcher | None = None
         self.runner: BotRunner | None = None
         self.web: WebServer | None = None
@@ -775,6 +793,7 @@ class App:
                 task.cancel()
             await asyncio.gather(*self._background, return_exceptions=True)
             await self._close_stack(stack)
+            banner_mod.uninstall(self.banner)
             log.info("SvBG Shop stopped")
 
     async def _close_stack(self, stack: AsyncExitStack) -> None:
@@ -1285,20 +1304,13 @@ class App:
             raise
         except ValueError as err:  # unknown filters: retrying cannot help
             raise PermanentJobError(str(err)) from err
-        text = _TXT["import_done"].format(
-            mode=_TXT[f"mode_{mode}"],
-            total=report.total,
-            subs=report.subscriptions_created,
-            users=report.users_created,
-            linked=report.already_linked,
-            conflicts=report.conflicts,
-        )
+        summary = import_summary(mode, report)
         if self.admin_chat is not None:
             from svbg.services.admin_chat import K_PANEL
 
-            await self.admin_chat.post(K_PANEL, text)
+            await self.admin_chat.post_report(K_PANEL, summary)
         else:
-            await self.notify_owners(text)
+            await self.notify_owners_report(summary)
 
     # ------------------------------------------------------------------ stage 2: sales
 
@@ -1328,18 +1340,12 @@ class App:
 
     def _settings_notes(self, sid: str) -> list[str]:
         """Lines under a «Платёжки» subsection: where the provider must send its webhooks."""
+        from svbg.tg.admin.payments import webhook_hint
+
         prefix = f"{PAYMENTS_SECTION}."
         if not sid.startswith(prefix) or self.pay_instances is None:
             return []
-        inst = self.pay_instances.by_slug(sid[len(prefix) :])
-        if inst is None:
-            return ["Адрес для вебхука появится здесь, когда касса включится."]
-        if not inst.caps.webhook:
-            return ["Вебхук этой кассе не нужен: бот сам проверяет оплату."]
-        url = self.pay_instances.webhook_url(inst)
-        if url is None:
-            return ["Чтобы касса присылала вебхуки, задайте адрес бота в PUBLIC_URL."]
-        return ["Адрес для вебхука, вставьте его в кабинете кассы:", f"<code>{escape(url)}</code>"]
+        return webhook_hint(self.pay_instances, sid[len(prefix) :])[0]
 
     def payment_slugs(self) -> list[str]:
         """Slugs of the payment instances whose ``PAY_<SLUG>_*`` keys are registered (component per slug)."""
@@ -1569,7 +1575,9 @@ class App:
 
         With deep links wired this is the gate of :meth:`DeeplinkService.start_hook`: it is called with
         ``link=None`` (the deep-link service keeps the intent and resumes it after onboarding)."""
-        if user.is_new and self.admin_events is not None and not user.at_least("support"):
+        # behind the entry captcha the post waits for the right tap (_captcha_passed): bots are not announced
+        captcha = self.user_path is not None and self.user_path.captcha.required(user)
+        if user.is_new and self.admin_events is not None and not user.at_least("support") and not captcha:
             self._spawn(self.admin_events.new_user(user.user_id), "admin-new-user")
         picked = None if self.user_path is None else await self.user_path.on_start(user, chat_id, link)
         if picked is not None or not self._pages_wired or self.pages is None or user.at_least("support"):
@@ -1581,6 +1589,14 @@ class App:
                 await self.hub.capture(exc, "app:start:consent", module="svbg.pages", handled="пропущено")
             return None
         return None if page is None else ("page", page.code)
+
+    async def _captcha_passed(self, user: UserCtx) -> None:
+        """A new user passed the entry captcha: the «👤 Новые пользователи» post and the referral welcome
+        (with the days «за переход») that waited for it."""
+        if self.admin_events is not None:
+            self._spawn(self.admin_events.new_user(user.user_id), "admin-new-user")
+        if self.referral is not None:
+            await self.referral.captcha_passed(user.user_id)
 
     async def _after_onboarding(self, ctx: Any) -> Any:
         """Resume point after the channel gate / language choice (decision C9): the consent page first, then
@@ -1900,13 +1916,13 @@ class App:
             value = app_modules.cfg(current, app_modules.SHADOW_SOURCE_KEY, None)
             return _opt_secret(value)
 
-        async def post(_kind: str, text: str) -> None:
+        async def post(_kind: str, report: Any) -> None:  # a svbg.tg.report.Report
             if self.admin_chat is not None:
                 from svbg.services.admin_chat import K_SYSTEM
 
-                await self.admin_chat.post(K_SYSTEM, text)
+                await self.admin_chat.post_report(K_SYSTEM, report)
             else:
-                await self.notify_owners(text)
+                await self.notify_owners_report(report)
 
         def import_config() -> Any:
             make = self.import_config
@@ -2036,6 +2052,12 @@ class App:
     ) -> None:
         codec = CallbackCodec(db, key=derive_key(_secret_key(boot), "callback-codec"))
         self._codec = codec
+        media_url = None if self.public_media is None else app_modules.public_media_url(self.public_media)
+        # the default banner on every message the bot sends (screens, notifications, admin chat, backups)
+        self.banner = banner = BannerPolicy(
+            content, public_url=self._public_url, media_url=media_url, media_root=boot.data_dir / "media"
+        )
+        banner_mod.install(banner)
         self.screens = screens = ScreenRouter(
             transport=BotTransport(self.holder),
             user_loader=self._load_user,
@@ -2044,9 +2066,10 @@ class App:
             codec=codec,
             hub=hub,
             public_url=self._public_url,
-            media_url=None if self.public_media is None else app_modules.public_media_url(self.public_media),
+            media_url=media_url,
             media_root=boot.data_dir / "media",
             on_denied=self._on_denied,
+            banner=banner,
         )
         self.dispatcher = dp = Dispatcher(name="svbg")
         runner_kwargs = dict(self.options.runner_kwargs)
@@ -2055,6 +2078,7 @@ class App:
         runner_kwargs.setdefault(
             "drain_timeout", _inner_budget(self.options.stop_timeout, reserve=_RUNNER_STOP_RESERVE, share=0.3)
         )
+        runner_kwargs.setdefault("request_middlewares", [BannerMiddleware(banner)])
         self.runner = BotRunner(
             settings, dp, hub, holder=self.holder, workflow_data={"app": self}, **runner_kwargs
         )
@@ -2271,6 +2295,8 @@ class App:
 
         if self.user_path is not None:
             self.user_path.home.after_onboarding = self._after_onboarding
+            if self._captcha_passed not in self.user_path.captcha.on_passed:
+                self.user_path.captcha.on_passed.append(self._captcha_passed)
             shop = self.user_path.shop
             shop.promo = self.promo
             shop.link_code = self.deeplinks.granted_plan_code if self.deeplinks is not None else None
@@ -2369,6 +2395,27 @@ class App:
                     delivered += 1
             except (TelegramAPIError, NotifierError, BotUnavailableError, *TRANSPORT_ERRORS) as exc:
                 log.warning("owner notification failed: %s", type(exc).__name__)
+        return delivered
+
+    async def notify_owners_report(self, report: Report, *, priority: Priority = Priority.NORMAL) -> int:
+        """A :class:`~svbg.tg.report.Report` to every owner (rich, or its HTML text); never raises."""
+        if self.users is None or self.notifier is None:
+            return 0
+        delivered = 0
+        try:
+            owners = await self.users.owner_ids()
+        except (sa.exc.SQLAlchemyError, OSError) as exc:
+            log.warning("cannot resolve owners: %s", type(exc).__name__)
+            return 0
+        for chat_id in sorted(owners):
+            try:
+                sent = await send_report(
+                    self.notifier, chat_id, report, bot=self.holder.get(), priority=priority
+                )
+            except (TelegramAPIError, NotifierError, BotUnavailableError, *TRANSPORT_ERRORS) as exc:
+                log.warning("owner report failed: %s", type(exc).__name__)
+                continue
+            delivered += sent is not None
         return delivered
 
     async def _startup_report(self) -> None:

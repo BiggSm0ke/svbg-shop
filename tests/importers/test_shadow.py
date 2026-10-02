@@ -1150,8 +1150,8 @@ async def test_service_pass_reads_only_and_reports(stand: Stand) -> None:
     calls: list[dict[str, Any]] = []
     attention = _Attention()
 
-    async def post(kind: str, text: str) -> None:
-        posts.append((kind, text))
+    async def post(kind: str, report: Any) -> None:
+        posts.append((kind, report.html()))
 
     async def importer(**kw: Any) -> Mapping[str, Any]:
         calls.append(kw)
@@ -1180,7 +1180,7 @@ async def test_service_pass_reads_only_and_reports(stand: Stand) -> None:
     mutating = [r for r in stand.panel.requests if r.method != "GET"]
     assert [(r.method, r.path, r.body) for r in mutating] == [("PATCH", "/users", {"id": 5 + PROBE_OFFSET})]
     assert report.probe is not None and report.probe.status == 403
-    assert posts and posts[0][0] == "system" and "С1 ✅" in posts[0][1] and "Writer: 0" in posts[0][1]
+    assert posts and posts[0][0] == "system" and "С1 ✅" in posts[0][1] and "Writer: <b>0 " in posts[0][1]
     assert attention.items == {}
     conn = await asyncpg.connect(stand.target)
     try:
@@ -1199,7 +1199,7 @@ async def test_service_pass_reads_only_and_reports(stand: Stand) -> None:
     report = await service.run("daily", as_of=stand.world.now)
     assert report.red_codes == ["C2"] and report.streak == 0
     assert attention.items["shadow:red"][0] == "warn"
-    assert "❌ Красные: С2" in posts[-1][1]
+    assert "Красные: <b>С2</b>" in posts[-1][1] and "<b>Расхождения</b>" in posts[-1][1]
 
 
 async def test_full_token_stops_shadow_before_anything(stand: Stand) -> None:

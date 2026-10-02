@@ -229,3 +229,45 @@ async def test_reload_500_screens_under_200ms(db: CountingDatabase) -> None:
     assert len(snap.by_id) >= 500
     assert snap.problems == ()
     assert min(timings) <= 200, timings
+
+
+async def test_retired_staff_buttons_go_away_only_while_untouched(db: CountingDatabase) -> None:
+    """An older install still has «⚙️ Настройки» and «📦 Тарифы» on home: untouched rows are deleted on the
+    next start (one audited batch, the constructor can undo it); a button the owner edited stays."""
+    from svbg.content.editing import ContentEditor, retire_system_buttons
+
+    store = ContentStore(db)
+    await store.load()
+    home = store.get_screen(defaults.HOME)
+    assert home is not None
+    for _code, seed in defaults.RETIRED_SYSTEM_BUTTONS:
+        await _insert_button(
+            db,
+            home.id,
+            system_key=seed.system_key,
+            label=dict(seed.label),
+            action=dict(seed.action),
+            visible_if=dict(seed.visible_if or {}),
+            row=9,
+        )
+    edited = defaults.RETIRED_SYSTEM_BUTTONS[1][1]
+    async with db.tx() as conn:  # the owner renamed «⚙️ Настройки»: theirs now
+        await conn.execute(
+            sa.update(screen_buttons)
+            .where(screen_buttons.c.system_key == edited.system_key)
+            .values(label={"ru": "⚙️ Мои настройки"})
+        )
+    async with db.tx() as conn:
+        assert await retire_system_buttons(conn) == 1
+    keys = {r["system_key"] for r in await db.raw("select system_key from screen_buttons")}
+    assert "plans" not in keys and "settings" in keys and "admin" in keys
+    async with db.tx() as conn:
+        assert await retire_system_buttons(conn) == 0  # idempotent
+    batch = await db.raw(
+        "select batch_id from content_audit where entity = 'note' and new->>'summary' like '🧹%'"
+    )
+    assert len(batch) == 1
+    editor = ContentEditor(db, store)
+    await editor.undo(str(batch[0]["batch_id"]), actor=None)
+    keys = {r["system_key"] for r in await db.raw("select system_key from screen_buttons")}
+    assert "plans" in keys  # «↩️ Отменить» brings it back

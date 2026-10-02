@@ -24,7 +24,7 @@ pytestmark = pytest.mark.pg
 
 
 def group_cards(shop: Shop, needle: str) -> list[dict[str, Any]]:
-    return [m for m in shop.tg.bot_messages(GROUP) if needle in str(m.get("text"))]
+    return [m for m in shop.tg.bot_messages(GROUP) if needle in str(m.get("text") or m.get("caption"))]
 
 
 def button_data(msg: dict[str, Any], label: str) -> str:
@@ -42,7 +42,7 @@ async def press_in_group(shop: Shop, msg: dict[str, Any], label: str) -> str:
     answer = await shop.tg.wait_for(
         "answerCallbackQuery", lambda c: c.params.get("callback_query_id") == cq, 15
     )
-    return str(answer.params.get("text") or "")
+    return str(answer.text or "")
 
 
 async def test_ip_guard_warns_owner_blocks_by_button_and_unblocks(
@@ -55,6 +55,7 @@ async def test_ip_guard_warns_owner_blocks_by_button_and_unblocks(
         buyer = chat(shop, 5_701)
         await buyer.start()
         await shop.fund(5_701, 17_900)
+        await buyer.press("Подписка", expect="📱 Подписка")
         await buyer.press("Купить подписку", expect="Выберите срок")
         await buyer.press("1 мес.", expect="Спишем с баланса")
         await buyer.press("Оплатить 179")
@@ -98,7 +99,10 @@ async def test_ip_guard_warns_owner_blocks_by_button_and_unblocks(
             lambda: panel.calls("/connections/drop", "POST"), timeout=20, what="IPs dropped on the node"
         )
         await until(
-            lambda: any("заблок" in str(m.get("text")).lower() for m in shop.tg.bot_messages(5_701)),
+            lambda: any(
+                "заблок" in str(m.get("text") or m.get("caption")).lower()
+                for m in shop.tg.bot_messages(5_701)
+            ),
             timeout=20,
             what="the user is told",
         )

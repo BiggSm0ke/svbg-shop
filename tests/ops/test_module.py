@@ -61,10 +61,10 @@ class Calls:
     sends: list[tuple[int, str, dict[str, Any]]] = field(default_factory=list)
 
     async def post(self, kind: str, text: str, **kw: Any) -> None:
-        self.posts.append((kind, text, kw))
+        self.posts.append((kind, text if isinstance(text, str) else text.html(), kw))
 
     async def send(self, chat_id: int, text: str, **kw: Any) -> None:
-        self.sends.append((chat_id, text, kw))
+        self.sends.append((chat_id, text if isinstance(text, str) else text.html(), kw))
 
 
 @dataclass
@@ -145,9 +145,10 @@ async def test_owner_screen(ops: Ops, db: CountingDatabase) -> None:
         "📊 Отчёт сейчас",
         "🔄 Проверить обновления",
         "⚙️ Настройки",
-        "◀️ Меню",
+        "⬅️ Система",
+        "🛠 Админка",
     ]
-    assert ops.env.button("Настройки") == encode("set.sec", arg="reports")
+    assert ops.env.button("Настройки") == encode("set.v", arg="sys.backup")  # the backup slice
 
     await MetaState(db).merge(
         K_BACKUP,
@@ -215,7 +216,7 @@ async def test_report_button_in_the_admin_group(ops: Ops) -> None:
     await ops.env.router.dispatch_callback(_group_callback(OWNER, encode(ACTIONS, A_REPORT)))
     await ops.module.drain()
     ((kind, text, kw),) = ops.calls.posts
-    assert kind == "reports" and "Отчёт за сегодня" in text and kw["html"] is True and kw["buttons"]
+    assert kind == "reports" and "Отчёт за сегодня" in text and kw["buttons"]
     # A group member without a bot role: «Нет прав», nothing posted.
     await ops.env.router.dispatch_callback(_group_callback(USER, encode(ACTIONS, A_REPORT)))
     assert ops.env.toasts[-1] == "Нет прав"

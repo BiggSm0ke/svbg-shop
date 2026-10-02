@@ -19,14 +19,18 @@ async def test_home_card_for_a_new_user(pg_dsn: str) -> None:
         assert "Подписки пока нет." in home.text
         assert "Баланс: 50 ₽" in home.text
         labels = home.labels()
-        assert "🛒 Купить подписку" in labels and "🎁 Попробовать бесплатно" in labels
-        assert (
-            "🔄 Продлить" not in labels and "🔗 Подключиться" not in labels and "📱 Устройства" not in labels
-        )
-        assert len(labels) <= 7
+        # Bedolaga order: balance, trial, «Подписка» (no suffix, own colour without a subscription), support
+        assert labels[:3] == ["💰 Баланс: 50 ₽", "🎁 Попробовать бесплатно", "📱 Подписка"]
+        assert labels[-1] == "💬 Поддержка"
+        assert not any(x in labels for x in ("🛒 Купить подписку", "🔄 Продлить", "🔗 Подключиться"))
+        assert "📱 Устройства" not in labels and len(labels) <= 7
         support = home.button("Поддержка")
         assert support.url == "https://t.me/svbg_support"
-        assert home.button("Купить").style == "success"
+        assert home.button("Подписка").style is None and home.data("Подписка") == "v1:sub:o"
+        section = await env.press(tg, "Подписка")
+        assert "Сейчас подписки нет" in section.text and "попробовать бесплатно: 3 дн." in section.text
+        assert section.labels()[:2] == ["🛒 Купить подписку", "🎁 Попробовать бесплатно"]
+        assert section.button("Купить").style == "success"
 
 
 async def test_trial_in_one_button_then_connect_in_the_same_message(pg_dsn: str) -> None:
@@ -46,7 +50,13 @@ async def test_trial_in_one_button_then_connect_in_the_same_message(pg_dsn: str)
         home2 = await env.click(tg, "v1:home:o", message_id=home.message_id)
         assert "🎁 Пробный период до" in home2.text
         assert "🎁 Попробовать бесплатно" not in home2.labels()
-        assert "🔗 Подключиться" in home2.labels() and "🛒 Купить подписку" in home2.labels()
+        assert "🔗 Подключиться" in home2.labels() and "🛒 Купить подписку" not in home2.labels()
+        trial_btn = home2.button("Подписка")
+        assert trial_btn.text == "📱 Подписка · 2 дн. 23 ч" and trial_btn.style == "danger"  # a trial is red
+        section = await env.press(tg, "Подписка", message_id=home.message_id)
+        assert "Статус: 🎁 пробный период" in section.text and "Осталось: 2 дн. 23 ч" in section.text
+        assert "🛒 Купить подписку" in section.labels() and "🔄 Продлить" not in section.labels()
+        home2 = await env.click(tg, "v1:home:o", message_id=home.message_id)
         # a second trial is refused with a toast, nothing new is created
         again = await env.click(tg, "v1:sys:trial", message_id=home.message_id)
         assert "уже был использован" in (env.tg.toasts()[-1] or "")
@@ -58,6 +68,7 @@ async def test_purchase_with_enough_balance(pg_dsn: str) -> None:
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user(balance=20_000)
         home = await env.open(tg)
+        await env.press(tg, "Подписка")
         periods = await env.press(tg, "Купить подписку")
         # a single plan: the plan list is skipped
         assert "Тариф 1" in periods.text and "Выберите срок" in periods.text
@@ -83,6 +94,7 @@ async def test_shortfall_tops_up_and_completes_in_the_same_message(pg_dsn: str) 
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user(balance=5_000)
         home = await env.open(tg)
+        await env.press(tg, "Подписка")
         await env.press(tg, "Купить подписку")
         checkout = await env.press(tg, "1 мес.")
         # not enough money: the methods are on the checkout itself
@@ -123,6 +135,7 @@ async def test_late_payment_lands_on_balance_with_a_buy_button(pg_dsn: str) -> N
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user()
         home = await env.open(tg)
+        await env.press(tg, "Подписка")
         await env.press(tg, "Купить подписку")
         await env.press(tg, "1 мес.")
         await env.press(tg, "СБП")
@@ -147,6 +160,7 @@ async def test_other_amount_form_and_surplus_note(pg_dsn: str) -> None:
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user(balance=12_000)
         await env.open(tg)
+        await env.press(tg, "Подписка")
         await env.press(tg, "Купить подписку")
         short = await env.press(tg, "1 мес.")  # not enough money: the methods are on the checkout
         assert "Не хватает 59 ₽" in short.text
@@ -194,6 +208,7 @@ async def test_stars_invoice_and_successful_payment(pg_dsn: str) -> None:
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user()
         home = await env.open(tg)
+        await env.press(tg, "Подписка")
         await env.press(tg, "Купить подписку")
         await env.press(tg, "1 мес.")
         invoice = await env.press(tg, "Stars")
@@ -274,6 +289,7 @@ async def test_devices_list_refresh_and_delete_through_the_writer(pg_dsn: str) -
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user(balance=20_000)
         await env.open(tg)
+        await env.press(tg, "Подписка")
         await env.press(tg, "Купить подписку")
         await env.press(tg, "1 мес.")
         await env.press(tg, "Оплатить")
@@ -304,6 +320,7 @@ async def test_reissue_link_turns_into_the_new_link(pg_dsn: str) -> None:
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user(balance=20_000)
         await env.open(tg)
+        await env.press(tg, "Подписка")
         await env.press(tg, "Купить подписку")
         await env.press(tg, "1 мес.")
         await env.press(tg, "Оплатить")

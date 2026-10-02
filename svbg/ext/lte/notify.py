@@ -36,6 +36,7 @@ from svbg.ext.lte.tables import lte_groups, lte_periods
 from svbg.jobs.queue import enqueue
 from svbg.services.notify_user import notification_log
 from svbg.subscriptions.tables import subscriptions
+from svbg.tg.report import Report
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -422,12 +423,52 @@ CARD_T: Final[Mapping[str, str]] = {
 REASONS: Final[Mapping[str, str]] = {"quota": "лимит", "unavailable": "недоступно", "manual": "вручную"}
 
 
-async def post_cards(admin_chat: Any | None, texts: Iterable[str]) -> None:
-    """Best effort: a card that could not be posted never breaks the decision (already committed)."""
+def card_report(kind: str, **kw: Any) -> Report:
+    """A card for «🌐 Трафик LTE»: ``block`` (sid, used, limit, reason), ``release_all`` (n, reason),
+    ``topup`` (sid, gb). ``used`` / ``limit`` / ``gb`` are already formatted numbers of GB."""
+    if kind == "block":
+        return (
+            Report("🚫", "LTE: блок")
+            .line("Подписка", f"№{kw['sid']}")
+            .line("Израсходовано", f"{kw['used']} из {kw['limit']} ГБ")
+            .line("Причина", str(kw["reason"]))
+        )
+    if kind == "release_all":
+        rep = Report("✅", "LTE: блоки сняты").line("Снято", f"{kw['n']} шт.")
+        return rep.line("Причина", str(kw["reason"]))
+    if kind == "topup":
+        rep = Report("⚡", "LTE: докупка").line("Подписка", f"№{kw['sid']}")
+        return rep.line("Добавлено", f"+{kw['gb']} ГБ")
+    raise ValueError(f"unknown LTE card {kind!r}")
+
+
+def card_from_payload(payload: Mapping[str, Any]) -> Report | str | None:
+    """The card of a ``lte.card`` job: ``{"card": kind, ...fields}``; older jobs carry ready ``text``."""
+    kind = payload.get("card")
+    if isinstance(kind, str):
+        fields = {k: v for k, v in payload.items() if k not in ("card", "text")}
+        try:
+            return card_report(kind, **fields)
+        except (KeyError, ValueError):
+            log.warning("lte: bad card payload %r", kind)
+    text = payload.get("text")
+    return text[:3000] if isinstance(text, str) and text else None
+
+
+async def post_cards(admin_chat: Any | None, cards: Iterable[Report | str]) -> None:
+    """Best effort: a card that could not be posted never breaks the decision (already committed).
+
+    A :class:`~svbg.tg.report.Report` goes as a report (rich where the chat takes it), a string as HTML."""
     if admin_chat is None:
         return
-    for text in texts:
+    for card in cards:
         try:
-            await admin_chat.post("lte", text, html=True)
+            if isinstance(card, Report):
+                if hasattr(admin_chat, "post_report"):
+                    await admin_chat.post_report("lte", card)
+                else:
+                    await admin_chat.post("lte", card.html(), html=True)
+            else:
+                await admin_chat.post("lte", card, html=True)
         except Exception:
             log.exception("lte: admin card failed")

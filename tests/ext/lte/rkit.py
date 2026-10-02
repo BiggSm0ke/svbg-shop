@@ -74,11 +74,17 @@ class FakeAdminChat:
     posts: list[tuple[str, str]] = field(default_factory=list)
     fail: bool = False
 
+    reports: list[Any] = field(default_factory=list)
+
     async def post(self, kind: str, text: str, **kwargs: Any) -> None:
         del kwargs
         if self.fail:
             raise RuntimeError("admin chat down")
         self.posts.append((kind, text))
+
+    async def post_report(self, kind: str, report: Any, **kwargs: Any) -> None:
+        await self.post(kind, report.html(), **kwargs)
+        self.reports.append(report)
 
 
 @dataclass

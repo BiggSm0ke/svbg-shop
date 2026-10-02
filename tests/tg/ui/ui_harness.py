@@ -85,6 +85,13 @@ class FakeTransport:
             return Message(
                 message_id=next(self._ids), date=DATE, chat=Chat(id=chat_id, type="private"), **extra
             )
+        if isinstance(method, EditMessageMedia):  # text → photo in place: Telegram returns the message
+            return Message(
+                message_id=method.message_id,
+                date=DATE,
+                chat=Chat(id=chat_id, type="private"),
+                photo=[PhotoSize(file_id="TG-FILE-ID", file_unique_id="u2", width=100, height=100)],
+            )
         if isinstance(method, (*_EDITS, DeleteMessage)):
             return True
         return True

@@ -107,6 +107,8 @@ async def test_apply_maps_every_field(target: CountingDatabase, src_dsn: str, sc
     assert u3["language"] == "ru" and u3["bot_blocked_at"] is not None
     assert (await one(target, "select bot_blocked_at from users where id = 5"))["bot_blocked_at"] is not None
     assert (await one(target, "select telegram_id from users where id = 6"))["telegram_id"] is None
+    no_captcha = await target.raw("select id from users where captcha_passed_at is null")
+    assert no_captcha == []  # imported users already use the bot: no entry captcha
     extras = {
         int(r["old_id"]): r["data"]
         for r in await target.raw("select old_id, data from legacy_id_map where entity = 'user'")

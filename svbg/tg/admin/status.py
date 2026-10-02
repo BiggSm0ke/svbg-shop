@@ -42,6 +42,8 @@ from svbg.core.component import Health, HealthReport
 from svbg.core.log import mask
 from svbg.remnawave.component import RemnawaveComponent
 from svbg.remnawave.errors import RemnawaveError
+from svbg.tg.admin import nav
+from svbg.tg.report import num, pre_table
 from svbg.tg.setup.wizard import (
     SCREEN as WIZARD_SCREEN,
 )
@@ -85,6 +87,7 @@ ACTIONS: Final = "stat"
 A_SNOOZE: Final = "snz"
 PERM_VIEW: Final = "system.view"
 SETTINGS_KEY_SCREEN: Final = "set.key"  # svbg.tg.admin.settings.SCREEN_KEY
+SLICE_SCREEN: Final = "set.v"  # svbg.tg.admin.slices.SCREEN
 HOME: Final = "home"
 
 ATTENTION_LIMIT: Final = 20
@@ -111,19 +114,23 @@ _SEVERITY_ICON: Final[Mapping[str, str]] = {"error": "🔴", "warn": "🟠", "in
 # Owner-facing texts (Russian) in one place.
 _T: Final[dict[str, str]] = {
     "title": "⚙️ <b>Состояние</b> · SvBG Shop {version}",
-    "uptime": "Работает {uptime} · память {rss}",
+    "uptime": "Работает <b>{uptime}</b> · память <b>{rss}</b>",
     "components": "<b>Компоненты</b>",
     "no_components": "Компоненты не зарегистрированы.",
     "jobs": "<b>Очередь задач</b>",
     "jobs_empty": "Задач нет.",
     "jobs_line": "{icon} {queue}: ждут {ready} · в работе {running} · ошибок {dead}",
+    "jobs_head": "Очередь",
+    "jobs_ready": "Ждут",
+    "jobs_running": "Идут",
+    "jobs_dead": "Ошибки",
     "tasks": "<b>Периодические задачи с проблемами</b>",
     "task_line": "⚠️ {name}: {problem}",
     "task_failed": "ошибка «{error}», последний успех {ok}",
     "task_never": "ещё ни разу не выполнилась успешно",
     "errors": "<b>Ошибки (открытые группы)</b>",
     "errors_none": "Открытых ошибок нет.",
-    "error_line": "{icon} ×{count} {title} — {place}, {at}",
+    "error_line": "{icon} <b>×{count}</b> {title} — {place}, {at}",
     "env": "<b>Настройки и .env</b>",
     "env_ok": "✅ .env синхронизирован{at}",
     "env_bad": "⚠️ .env: {error}",
@@ -472,6 +479,29 @@ class StatusScreens:
 
     # ------------------------------------------------------------ rendering
 
+    @staticmethod
+    def _jobs_table(jobs: Mapping[str, Mapping[str, int]]) -> list[str]:
+        """Queues × waiting / running / failed as a small monospace table (lines if it does not fit)."""
+        items = sorted(jobs.items())
+        head = [_T["jobs_head"], _T["jobs_ready"], _T["jobs_running"], _T["jobs_dead"]]
+        rows = [
+            [queue[:24], *(num(counts.get(k, 0)) for k in ("ready", "running", "dead"))]
+            for queue, counts in items
+        ]
+        pre = pre_table([head, *rows], ("left", "right", "right", "right"))
+        if pre is not None:
+            return [pre]
+        return [
+            _T["jobs_line"].format(
+                icon="❌" if counts.get("dead", 0) else "▫️",
+                queue=_esc(queue, 40),
+                ready=counts.get("ready", 0),
+                running=counts.get("running", 0),
+                dead=counts.get("dead", 0),
+            )
+            for queue, counts in items
+        ]
+
     def render(self, data: StatusData, *, owner: bool) -> View:
         lines = [_T["title"].format(version=_esc(self.version, 40))]
         lines.append(
@@ -492,17 +522,8 @@ class StatusScreens:
             lines += ["", _T["jobs"]]
             if not data.jobs:
                 lines.append(_T["jobs_empty"])
-            for queue, counts in sorted(data.jobs.items()):
-                dead = counts.get("dead", 0)
-                lines.append(
-                    _T["jobs_line"].format(
-                        icon="❌" if dead else "▫️",
-                        queue=_esc(queue, 40),
-                        ready=counts.get("ready", 0),
-                        running=counts.get("running", 0),
-                        dead=dead,
-                    )
-                )
+            else:
+                lines += self._jobs_table(data.jobs)
         if data.tasks:
             lines += ["", _T["tasks"]]
             lines += [_T["task_line"].format(name=_esc(n, 60), problem=p) for n, p in data.tasks[:10]]
@@ -548,10 +569,10 @@ class StatusScreens:
             keyboard.append(
                 [
                     nav_button(_T["wizard"], WIZARD_SCREEN),
-                    nav_button(_T["maintenance"], SETTINGS_KEY_SCREEN, arg="MAINTENANCE_MODE"),
+                    nav_button(_T["maintenance"], SLICE_SCREEN, arg="sys.maint"),
                 ]
             )
-        keyboard.append([nav_button(_T["menu"], HOME)])
+        keyboard.append(nav.back_row(SCREEN))
         return View(text=text, parse_mode="HTML", keyboard=keyboard)
 
     async def _status_screen(self, ctx: ScreenCtx, _arg: Any) -> View:
@@ -586,7 +607,7 @@ class StatusScreens:
         text = "\n".join(lines).strip()
         if len(text) > MAX_TEXT:
             text = text[: MAX_TEXT - 1] + "…"
-        keyboard.append([nav_button(_T["back"], SCREEN), nav_button(_T["menu"], HOME)])
+        keyboard.append(nav.back_row(SCREEN_ATTENTION))
         return View(text=text, parse_mode="HTML", keyboard=keyboard, toast=toast)
 
     async def _attention_screen(self, ctx: ScreenCtx, _arg: Any) -> View:
@@ -647,7 +668,7 @@ class StatusScreens:
         ]
         if ctx.user.role == "owner":
             keyboard.append([nav_button(_T["wizard"], WIZARD_SCREEN, arg="wh")])
-        keyboard.append([nav_button(_T["back"], SCREEN), nav_button(_T["menu"], HOME)])
+        keyboard.append(nav.back_row(SCREEN_PANEL))
         return View(text=f"{_T['panel_title']}\n\n{body}", parse_mode="HTML", keyboard=keyboard)
 
 

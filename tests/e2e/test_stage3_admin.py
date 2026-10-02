@@ -85,7 +85,8 @@ async def test_backup_then_restore_on_another_host(
         await owner.say("/edit", expect="Режим правки выключен")
 
         await owner.start()
-        await owner.tap("Админка", expect="Выберите раздел")
+        await owner.tap("Админка", expect="Чтобы найти человека")
+        await owner.tap("Система", expect="Состояние бота")
         await owner.tap("Бэкапы", expect="Бэкап сейчас")
         await owner.tap("💾 Бэкап сейчас")
         backups = app_env.data_dir / "backups"

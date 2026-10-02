@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from aiogram.methods import EditMessageText, SendMessage, SendPhoto
+from aiogram.methods import EditMessageMedia, EditMessageText, SendMessage, SendPhoto
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from svbg.content.store import ContentStore
@@ -353,9 +353,12 @@ async def test_card_toggle_qr_and_stats(env: AEnv) -> None:
     assert "🟢 работает" in env.text
     rows = await env.db.raw("select action from admin_audit order by id")
     assert [r["action"] for r in rows] == ["deeplink.disable", "deeplink.enable"]
+    mark = len(env.transport.calls)
     await env.press(OWNER, "QR")
-    photo = env.rendered()[-1]
-    assert isinstance(photo, SendPhoto) and f"l_{link.code}" in (photo.caption or "")
+    # the main message carries the banner photo: the QR replaces that photo in place
+    (photo,) = [c for c in env.transport.calls[mark:] if isinstance(c, SendPhoto | EditMessageMedia)]
+    caption = photo.caption if isinstance(photo, SendPhoto) else photo.media.caption
+    assert f"l_{link.code}" in (caption or "")
 
 
 async def test_card_click_budget(env: AEnv) -> None:

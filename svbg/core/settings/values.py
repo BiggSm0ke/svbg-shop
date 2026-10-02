@@ -343,12 +343,19 @@ def _format_duration(seconds: int) -> str:
     return "".join(out)
 
 
-def display(defn: SettingDef, value: Any) -> str:
-    """UI-safe short form: secrets as ``••••••••a1B9``, empty as ``—``."""
+def display(defn: SettingDef, value: Any, *, human: bool = False) -> str:
+    """UI-safe short form: secrets as ``••••••••a1B9``, empty as ``—``. ``human`` (the bot's screens): enum
+    values by their label («Чат прямо в боте»); without it the raw value, as written in ``.env``."""
     if value in (None, "") or value == []:
         return "—"
     if defn.is_secret:
         return redact(str(value))
+    if human and kind_of(defn) == "enum":
+        from svbg.core.settings.labels import choice_label
+
+        label = choice_label(defn, value)
+        if label is not None:
+            return label
     return to_text(defn, value)
 
 

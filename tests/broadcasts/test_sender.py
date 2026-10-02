@@ -92,7 +92,7 @@ async def test_full_run_counts_blocked_and_failed(env: Env) -> None:
     copy = env.bot.of(CopyMessage)[0]
     assert (copy.from_chat_id, copy.message_id, copy.reply_markup) == (ADMIN_TG, 7, None)
     edits = [c for c in env.bot.of(EditMessageText) if c.chat_id == ADMIN_TG]
-    assert edits and "✅ завершена" in edits[-1].text and "Отправлено: 28" in edits[-1].text
+    assert edits and "✅ завершена" in edits[-1].text and "Отправлено: <b>28 из ~" in edits[-1].text
     assert statements <= 6  # 1 batch: get + select + save tx (update, users) + empty select + finish
     audit = await env.db.raw("select action, target from admin_audit")
     assert [(a["action"], a["target"]) for a in audit] == [("broadcast.start", f"broadcast:{bid}")]
@@ -308,3 +308,19 @@ async def test_transitions_are_guarded(env: Env) -> None:
     assert row["status"] == "canceled" and row["finished_at"] is not None
     edits = [c for c in env.bot.of(EditMessageText) if c.chat_id == ADMIN_TG]
     assert edits and "⏹ остановлена" in edits[-1].text  # no live run: the service refreshed it itself
+
+
+def test_text_broadcast_goes_as_send_message_while_the_banner_is_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    import svbg.tg.banner as banner_mod
+    from svbg.broadcasts.sender import _with_banner
+
+    text = {"type": "text", "text": "Привет", "entities": []}
+    assert not _with_banner(text)  # no banner installed: a copy, as before
+    monkeypatch.setattr(banner_mod, "is_banner_on", lambda: True)
+    assert _with_banner(text)
+    assert not _with_banner(
+        {**text, "entities": [{"type": "custom_emoji", "offset": 0, "length": 1, "custom_emoji_id": "1"}]}
+    )
+    assert not _with_banner({**text, "preview": {"url": "https://example.org/"}})
+    assert _with_banner({**text, "preview": {"is_disabled": True}})
+    assert not _with_banner({"type": "photo", "file_id": "F", "text": "x"})

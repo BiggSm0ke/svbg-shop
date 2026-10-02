@@ -38,8 +38,8 @@ class FakeDelivery:
 class Notes:
     items: list[tuple[str, bool]] = field(default_factory=list)
 
-    async def __call__(self, text: str, high: bool) -> None:
-        self.items.append((text, high))
+    async def __call__(self, report: Any, high: bool) -> None:
+        self.items.append((report.html(), high))
 
 
 @pytest.fixture
@@ -114,7 +114,7 @@ async def test_without_password_nothing_goes_to_telegram(
     result = await svc.run()
     assert not result.encrypted and delivery.sent == []
     ((text, high),) = notes.items
-    assert "BACKUP_PASSWORD" in text and "без пароля" in text and high
+    assert "BACKUP_PASSWORD" in text and "без шифрования" in text and high
 
 
 async def test_upload_failure_keeps_the_local_file(
@@ -142,7 +142,7 @@ async def test_failure_raises_attention_and_success_resolves_it(
     items = await AttentionService(db).open_items()
     assert [i.dedup_key for i in items] == ["ops:backup"] and items[0].fix_action == "screen:ops"
     ((text, high),) = notes.items
-    assert text.startswith("🔴 Бэкап не удался") and high and "topsecret" not in text
+    assert text.startswith("🔴 <b>Бэкап не удался</b>") and high and "topsecret" not in text
     assert (await MetaState(db).get(K_BACKUP))["last_error"]["error"]
 
     ok = _service(db, tmp_path, pg_tools, {})

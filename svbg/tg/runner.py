@@ -39,7 +39,7 @@ import logging
 import re
 import secrets
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
@@ -72,6 +72,7 @@ from svbg.tg.notifier import TRANSPORT_ERRORS
 
 if TYPE_CHECKING:
     from aiogram import Dispatcher
+    from aiogram.client.session.middlewares.base import BaseRequestMiddleware
 
 __all__ = [
     "BotConfig",
@@ -320,8 +321,11 @@ class BotRunner:
         workflow_data: Mapping[str, Any] | None = None,
         webhook_health_ttl: float = 30.0,
         webhook_health_wait: float = 2.0,
+        request_middlewares: Sequence[BaseRequestMiddleware] = (),
     ) -> None:
         self.settings = settings
+        #: Installed on every Bot's session (the default banner on every outgoing message).
+        self._request_middlewares = tuple(request_middlewares)
         self.dp = dispatcher
         self.hub = hub
         self.holder = holder or BotHolder()
@@ -890,7 +894,7 @@ class BotRunner:
 
     def _build_bot(self, cfg: BotConfig) -> Bot:
         try:
-            return self._factory(cfg)
+            bot = self._factory(cfg)
         except TokenValidationError:
             raise ProbeError(_TXT["bad_token_format"], fix_action=fix_setting("BOT_TOKEN")) from None
         except (ValueError, RuntimeError, TypeError) as exc:
@@ -898,6 +902,10 @@ class BotRunner:
                 _TXT["bad_proxy"].format(reason=type(exc).__name__),
                 fix_action=fix_setting("TELEGRAM_PROXY"),
             ) from None
+        for mw in self._request_middlewares:
+            if mw not in bot.session.middleware:  # a reused session keeps what it has
+                bot.session.middleware.register(mw)
+        return bot
 
     async def _get_me(self, bot: Bot) -> User:
         try:

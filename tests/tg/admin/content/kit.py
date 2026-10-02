@@ -9,7 +9,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from aiogram.methods import EditMessageText, GetCustomEmojiStickers, SendMessage, SendPhoto, TelegramMethod
+from aiogram.methods import (
+    EditMessageMedia,
+    EditMessageText,
+    GetCustomEmojiStickers,
+    SendMessage,
+    SendPhoto,
+    TelegramMethod,
+)
 from aiogram.types import (
     Chat,
     InlineKeyboardMarkup,
@@ -139,11 +146,17 @@ class CEnv:
     # ---- what the user sees
 
     def last(self) -> TelegramMethod[Any]:
-        shown = [c for c in self.transport.calls if isinstance(c, SendMessage | EditMessageText | SendPhoto)]
+        shown = [
+            c
+            for c in self.transport.calls
+            if isinstance(c, SendMessage | EditMessageText | SendPhoto | EditMessageMedia)
+        ]
         return shown[-1]
 
     def last_text(self) -> str:
         m = self.last()
+        if isinstance(m, EditMessageMedia):  # a text message turned into the picture in place
+            return str(m.media.caption or "")
         return str(getattr(m, "text", None) or getattr(m, "caption", None) or "")
 
     def buttons(self) -> list[tuple[str, str | None]]:

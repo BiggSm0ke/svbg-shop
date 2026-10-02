@@ -24,7 +24,7 @@ from tests.pgcluster import PgCluster
 
 pytestmark = pytest.mark.pg
 
-HEAD = "0005_tickets"
+HEAD = "0006_captcha"
 
 _COLUMNS = """
 select table_name, column_name, ordinal_position, data_type, udt_name, is_nullable, column_default,
@@ -215,6 +215,27 @@ async def test_stage34_upgrade_from_stage2_with_data(pg_dsn: str, other_dsn: str
             await conn.execute("insert into import_runs (source, mode, status) values ('x', 'bogus', 'done')")
     finally:
         await conn.close()
+
+
+async def test_captcha_upgrade_marks_everybody_already_there(pg_dsn: str) -> None:
+    """``0006_captcha``: users who were there before the captcha count as passed, newcomers do not."""
+    await migrations.upgrade(pg_dsn, "0005_tickets")
+    conn = await asyncpg.connect(pg_dsn)
+    try:
+        old = await conn.fetchval("insert into users (telegram_id) values (42) returning id")
+    finally:
+        await conn.close()
+    await migrations.upgrade(pg_dsn)
+    conn = await asyncpg.connect(pg_dsn)
+    try:
+        assert await conn.fetchval("select captcha_passed_at is not null from users where id = $1", old)
+        new = await conn.fetchval("insert into users (telegram_id) values (43) returning id")
+        assert await conn.fetchval("select captcha_passed_at from users where id = $1", new) is None
+    finally:
+        await conn.close()
+    await asyncio.to_thread(command.downgrade, migrations.alembic_config(pg_dsn), "0005_tickets")
+    columns = [c[1] for c in (await _snapshot(pg_dsn))["columns"] if c[0] == "users"]
+    assert "captcha_passed_at" not in columns and "notify_marketing" in columns
 
 
 async def test_stage34_downgrade_restores_stage2(pg_dsn: str, other_dsn: str) -> None:

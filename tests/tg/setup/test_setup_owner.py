@@ -177,7 +177,7 @@ async def test_start_with_link_makes_owner_and_greets(senv: SEnv) -> None:
     assert link.code not in senv.all_text()
     # the welcome button leads to the settings root, which the new owner may open
     await senv.click(321, sent.reply_markup.inline_keyboard[0][0].callback_data)  # type: ignore[union-attr]
-    assert "Настройки" in senv.text and "Запуск" in " ".join(senv.labels())
+    assert "Все настройки" in senv.text and "Запуск" in " ".join(senv.labels())
     # used link: a clear message, no second owner
     assert await setup.handle_start(text_message(654, f"/start {link.payload}"))
     assert "недействительна" in senv.transport.of(SendMessage)[-1].text

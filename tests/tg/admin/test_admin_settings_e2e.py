@@ -128,14 +128,14 @@ async def test_owner_journey(world: World) -> None:
 
     await world.press(owner, _find(buttons, "Настройки"), msg_id)
     text, msg_id, buttons = world.screen(owner)
-    assert "Настройки" in text
+    assert "Все настройки" in text
     assert world.fake.calls_for("answerCallbackQuery")
 
     await world.press(owner, _find(buttons, "Продажи"), msg_id)
     text, msg_id, buttons = world.screen(owner)
     await world.press(owner, _find(buttons, "Дней пробного периода"), msg_id)
     text, msg_id, buttons = world.screen(owner)
-    assert "<code>TRIAL_DAYS</code>" in text
+    assert "Ключ в .env: <code>TRIAL_DAYS</code>" in text
     await world.press(owner, _find(buttons, "Изменить"), msg_id)
     await world.send(owner, "14")
     text, msg_id, buttons = world.screen(owner)

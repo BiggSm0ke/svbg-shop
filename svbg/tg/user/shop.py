@@ -104,6 +104,7 @@ class ShopScreens(Base):
         router.screen(seeds.TOPUP)(self.topup_screen)
         router.action(seeds.BUY, "pick")(self.pick)
         router.action(seeds.BUY, "reorder")(self.reorder)
+        router.action("sys", "renew")(self.renew)
         router.action(PAY, "go")(self.pay)
         router.action(PAY, "inv")(self.invoice)
         router.action(PAY, "paid")(self.i_paid)
@@ -226,7 +227,21 @@ class ShopScreens(Base):
     # ------------------------------------------------------------------ plans and periods
 
     async def buy(self, ctx: ScreenCtx, _arg: Any) -> HandlerResult:
+        return self._buy_view(ctx, await self.enrich(ctx))
+
+    async def renew(self, ctx: ScreenCtx, _arg: Any) -> HandlerResult:
+        """«🔄 Продлить» (``system:renew``): the periods of the current plan when it is still renewable, else
+        the plan list (one SQL either way)."""
         status = await self.enrich(ctx)
+        sub = status.sub if status is not None else None
+        if sub is not None and not sub.is_trial and sub.plan_id is not None:
+            plans = self._sale_plans(ctx.user, status)
+            current = next((p for p in plans if p.id == sub.plan_id), None)
+            if current is not None:
+                return self._plan_view(ctx, status, current, single=len(plans) == 1)
+        return self._buy_view(ctx, status)
+
+    def _buy_view(self, ctx: ScreenCtx, status: UserStatus | None) -> HandlerResult:
         lang = ctx.lang
         plans = self._sale_plans(ctx.user, status)
         if not plans:
@@ -285,7 +300,7 @@ class ShopScreens(Base):
             if plan.unlimited_traffic
             else f"{plan.traffic_bytes / 1024**3:g} GB",
         }
-        back = self.back(lang, seeds.HOME if single else seeds.BUY)
+        back = self.back(lang, seeds.SUB if single else seeds.BUY)
         return screen_view(ctx, seeds.BUY_PLAN, values, top=rows, bottom=[back])
 
     # ------------------------------------------------------------------ checkout

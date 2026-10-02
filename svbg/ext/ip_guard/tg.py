@@ -341,6 +341,7 @@ async def screen_rows(db: Database, section: str, page: int) -> tuple[list[str],
 
 def install_screens(router: Any, service: Callable[[], IpGuardService], db: Database) -> None:
     """Admin screen ``ipguard`` (sections, 10 per page) and the ``mod`` actions of the user card slot."""
+    from svbg.tg.admin import nav as admin_nav
     from svbg.tg.ui.renderer import MODULE_SCREEN, nav_button
     from svbg.tg.ui.view import Redirect, Toast, View
 
@@ -383,7 +384,9 @@ def install_screens(router: Any, service: Callable[[], IpGuardService], db: Data
             nav.append(nav_button("▶️", SCREEN, arg=f"{section}:{page + 1}"))
         if nav:
             keyboard.append(nav)
-        keyboard.append([nav_button("🏠 Меню", "home")])
+        if ctx.user.role == "owner" and admin_nav.has_screen(router, "set.v"):
+            keyboard.append([nav_button("⚙️ Настройки", "set.v", arg="mod.ipguard")])
+        keyboard.append(admin_nav.back_row(SCREEN))
         return View(text=text, parse_mode="HTML", keyboard=keyboard)
 
     async def _perm(ctx: Any, perm: str) -> bool:

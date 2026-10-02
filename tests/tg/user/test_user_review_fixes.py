@@ -50,6 +50,7 @@ async def test_paid_message_is_not_overwritten_by_a_late_processing_screen(pg_ds
     async with build_user_env(pg_dsn) as env:
         _uid, tg = await env.new_user(balance=20_000)
         home = await env.open(tg)
+        await env.press(tg, "Подписка")
         await env.press(tg, "Купить подписку")
         await env.press(tg, "1 мес.")
         await _race(env, tg, "Оплатить")
@@ -72,6 +73,7 @@ async def test_repeated_pay_on_a_done_order_shows_connect(pg_dsn: str) -> None:
     async with build_user_env(pg_dsn) as env:
         _uid, tg = await env.new_user(balance=20_000)
         await env.open(tg)
+        await env.press(tg, "Подписка")
         await env.press(tg, "Купить подписку")
         checkout = await env.press(tg, "1 мес.")
         data = checkout.data("Оплатить")
@@ -90,6 +92,7 @@ async def test_first_purchase_reaches_the_invoice_in_three_taps(pg_dsn: str) -> 
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user()
         home = await env.open(tg)
+        await env.press(tg, "Подписка")
         await env.press(tg, "Купить подписку")  # 1
         checkout = await env.press(tg, "1 мес.")  # 2
         assert "Не хватает 179 ₽. Выберите, чем доплатить" in checkout.text
@@ -110,6 +113,7 @@ async def test_creating_invoice_is_visible_and_a_double_tap_reuses_it(pg_dsn: st
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user()
         await env.open(tg)
+        await env.press(tg, "Подписка")
         await env.press(tg, "Купить подписку")
         checkout = await env.press(tg, "1 мес.")
         data = checkout.data("СБП")
@@ -135,6 +139,7 @@ async def test_method_on_checkout_pays_from_the_balance_when_it_grew(pg_dsn: str
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user()
         await env.open(tg)
+        await env.press(tg, "Подписка")
         await env.press(tg, "Купить подписку")
         checkout = await env.press(tg, "1 мес.")
         await env.b.fund(uid, 17_900)  # money arrived some other way meanwhile
@@ -153,6 +158,7 @@ async def test_refresh_does_not_hit_the_panel_while_the_list_is_fresh(pg_dsn: st
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user(balance=20_000)
         await env.open(tg)
+        await env.press(tg, "Подписка")
         await env.press(tg, "Купить подписку")
         await env.press(tg, "1 мес.")
         await env.press(tg, "Оплатить")
@@ -211,6 +217,7 @@ async def test_devices_screen_says_the_panel_is_down_after_the_last_attempt(pg_d
 
 async def _buy_with_balance(env: UserEnv, tg: int) -> None:
     await env.open(tg)
+    await env.press(tg, "Подписка")
     await env.press(tg, "Купить подписку")
     await env.press(tg, "1 мес.")
     await env.press(tg, "Оплатить")

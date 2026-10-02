@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from aiogram.methods import EditMessageText, SendMessage, SendPhoto
+from aiogram.methods import EditMessageMedia, EditMessageText, SendMessage
 
 from svbg.tg.ui import codec
 from svbg.tg.ui.edit_mode import ACTIONS, SCREEN_BUTTON, SCREEN_EDITOR, SCREEN_PREVIEW
@@ -106,8 +106,8 @@ async def test_screen_picture_is_uploaded_stored_and_shown(ce: CEnv) -> None:
     assert (ce.library.root / str(media.path)).is_file()
     assert media.file_ids.get("42") == "PHOTO-ID"  # kept as is → the bot's file_id is reused
     await ce.click(USER, "home")
-    sent = ce.last()
-    assert isinstance(sent, SendPhoto) and sent.photo == "PHOTO-ID"
+    sent = ce.last()  # the text message becomes the picture in place
+    assert isinstance(sent, EditMessageMedia) and sent.media.media == "PHOTO-ID"
 
 
 async def test_button_wizard_creates_button_with_condition(ce: CEnv) -> None:

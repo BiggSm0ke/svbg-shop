@@ -48,6 +48,7 @@ from svbg.core import clock
 from svbg.core.log import mask
 from svbg.ops.crypt import EncryptingWriter, KdfParams, encrypt_bytes
 from svbg.ops.pgtools import PgToolError, PgTools, conninfo, major_version
+from svbg.tg.report import Report, code
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -612,8 +613,8 @@ class Delivery(Protocol):
     async def send(self, files: Sequence[Path], captions: Sequence[str]) -> int: ...
 
 
-#: ``notify(text, high)`` into the backups topic (Telegram HTML).
-Notify = Callable[[str, bool], Awaitable[Any]]
+#: ``notify(report, high)`` into the backups topic.
+Notify = Callable[[Report, bool], Awaitable[Any]]
 
 
 class BackupBusyError(BackupError):
@@ -750,13 +751,15 @@ class BackupService:
             with contextlib.suppress(Exception):
                 await self._attention.resolve("ops:backup")
         if self._notify is not None and (notes or not sent):
-            text = f"💾 Бэкап готов: {result.path.name} · {human_size(result.size)}" + (
-                "" if result.encrypted else " · без пароля"
+            card = (
+                Report("💾", "Бэкап готов")
+                .line("Файл", code(result.path.name))
+                .line("Размер", human_size(result.size))
+                .line("Пароль", None if result.encrypted else "не задан, файл без шифрования")
+                .bullets(notes)
             )
-            if notes:
-                text += "\n" + "\n".join(f"⚠️ {n}" for n in notes)
             with contextlib.suppress(Exception):
-                await self._notify(_escape(text), bool(notes))
+                await self._notify(card, bool(notes))
         return result
 
     async def _send(self, result: BackupResult, tz_name: str) -> int:
@@ -783,16 +786,10 @@ class BackupService:
                 )
         if self._notify is not None:
             with contextlib.suppress(Exception):
-                await self._notify(_escape(f"🔴 Бэкап не удался: {reason}"), True)
+                await self._notify(Report("🔴", "Бэкап не удался").text(reason), True)
 
     async def status(self) -> dict[str, Any]:
         """Durable status for the ops screen (one statement)."""
         from svbg.ops.state import K_BACKUP
 
         return await self._state.get(K_BACKUP)
-
-
-def _escape(text: str) -> str:
-    import html
-
-    return html.escape(text, quote=False)

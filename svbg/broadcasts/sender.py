@@ -23,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import enum
-import html
 import logging
 import math
 import time
@@ -38,13 +37,14 @@ from aiogram.methods import DeleteMessage, EditMessageText, PinChatMessage, Tele
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from svbg.broadcasts.message import build_markup, copy_method, send_method
+from svbg.broadcasts.message import build_markup, copy_method, has_custom_emoji, send_method
 from svbg.broadcasts.repo import Broadcast, BroadcastRepo, Recipient
 from svbg.broadcasts.tables import broadcast_msgs, broadcasts
 from svbg.core import clock
 from svbg.core.tables import users
 from svbg.jobs import PermanentJobError, RetryJob, enqueue
 from svbg.tg.notifier import TRANSPORT_ERRORS, NotifierClosedError, NotifierError, Priority
+from svbg.tg.report import Report, num
 from svbg.tg.ui.codec import encode
 
 if TYPE_CHECKING:
@@ -59,6 +59,7 @@ __all__ = [
     "Delivery",
     "Outcome",
     "controls",
+    "progress_report",
     "progress_text",
     "run_dedup",
 ]
@@ -118,26 +119,33 @@ def cleanup_dedup(bid: int) -> str:
     return f"broadcast.cleanup:{bid}"
 
 
-def _fmt(n: int) -> str:
-    return f"{n:,}".replace(",", " ")
+def _bar(pct: int, width: int = 10) -> str:
+    full = min(width, max(0, round(pct * width / 100)))
+    return "▓" * full + "░" * (width - full) + f" {pct}%"
 
 
-def progress_text(bc: Broadcast, *, rate: float | None = None) -> str:
-    """Progress / summary text (HTML)."""
-    status = STATUS_LABELS.get(bc.status, bc.status)
-    lines = [f"📣 <b>Рассылка #{bc.id}</b> · {html.escape(status)}"]
+def progress_report(bc: Broadcast, *, rate: float | None = None) -> Report:
+    """Progress / summary of a broadcast: a bar and ``key: value`` lines."""
+    rep = Report("📣", f"Рассылка #{bc.id}", subtitle=STATUS_LABELS.get(bc.status, bc.status))
     total = max(bc.total, bc.processed)
-    pct = f" ({bc.processed * 100 // total}%)" if total else ""
-    lines.append(f"Отправлено: {_fmt(bc.sent)} из ~{_fmt(total)}{pct}")
-    lines.append(f"Ошибок: {_fmt(bc.failed)} · Заблокировали бота: {_fmt(bc.blocked)}")
+    if total:
+        rep.text(_bar(bc.processed * 100 // total))
+    rep.line("Отправлено", f"{num(bc.sent)} из ~{num(total)}")
+    rep.line("Ошибок", num(bc.failed)).line("Заблокировали бота", num(bc.blocked))
     if bc.status == "running":
         speed = rate if rate and rate > 0 else (GLOBAL_RATE / 2 if bc.pin else GLOBAL_RATE)
         left = max(total - bc.processed, 0)
         minutes = math.ceil(left / speed / 60) if left else 0
-        lines.append(f"Осталось ≈ {minutes} мин" if minutes else "Почти готово")
+        rep.line("Осталось", f"≈ {minutes} мин" if minutes else "почти готово")
     if bc.status == "paused":
-        lines.append("Нажмите «Продолжить» — отправка пойдёт с того же места.")
-    return "\n".join(lines)
+        rep.note("Нажмите «Продолжить», отправка пойдёт с того же места.")
+    return rep
+
+
+def progress_text(bc: Broadcast, *, rate: float | None = None) -> str:
+    """Progress / summary text (HTML). The message is edited every few seconds, so it stays a text message
+    (the banner comes as a link preview)."""
+    return progress_report(bc, rate=rate).html()
 
 
 def controls(bc: Broadcast) -> InlineKeyboardMarkup:
@@ -243,7 +251,7 @@ class BroadcastSender:
         try:
             result: Any = None
             sent = False
-            if bc.can_copy and bc.id not in self._source_lost:
+            if bc.can_copy and bc.id not in self._source_lost and not _with_banner(bc.content):
                 assert bc.source_chat_id is not None and bc.source_msg_id is not None
                 method = copy_method(bc.source_chat_id, bc.source_msg_id, chat_id, markup, silent=bc.silent)
                 try:
@@ -509,3 +517,18 @@ class BroadcastSender:
     async def _delete(self, chat_id: int, msg_id: int) -> None:
         with contextlib.suppress(TelegramAPIError, NotifierError, TimeoutError, *TRANSPORT_ERRORS):
             await self._call(DeleteMessage(chat_id=chat_id, message_id=msg_id), chat_id, Priority.LOW)
+
+
+def _with_banner(content: Any) -> bool:
+    """A text broadcast goes as ``sendMessage`` while the default banner is on, so it gets the banner too
+    (``copyMessage`` cannot add a picture). Kept as a copy: an owner's own link preview, custom emoji (they
+    survive only a copy when the bot owner has no Premium) and every broadcast with its own media."""
+    from svbg.tg.banner import is_banner_on
+
+    if not isinstance(content, Mapping) or content.get("type") != "text" or has_custom_emoji(content):
+        return False
+    preview = content.get("preview")
+    if isinstance(preview, Mapping) and (preview.get("url") or not preview.get("is_disabled")):
+        return False
+    return is_banner_on()
+

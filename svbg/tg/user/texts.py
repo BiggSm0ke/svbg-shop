@@ -17,9 +17,11 @@ from svbg.core.money import format_money
 
 __all__ = [
     "METHOD_ICONS",
+    "fmt_bytes",
     "fmt_date",
     "fmt_datetime",
     "fmt_left",
+    "fmt_left_short",
     "method_label",
     "money",
     "plural_days",
@@ -125,6 +127,10 @@ _RU: Final[Mapping[str, str]] = {
     "trial_unavailable": "Пробный период недоступен",
     "not_member_yet": "Подписка на канал пока не видна. Подпишитесь и нажмите ещё раз.",
     "channel_check_failed": "Не получилось проверить подписку. Попробуйте через минуту.",
+    "captcha_wrong": "Не то. Попробуйте ещё раз",
+    "captcha_cooldown": "Слишком много ошибок подряд. Подождите минуту и попробуйте снова",
+    "captcha_wait": "Подождите ещё {seconds} сек.",
+    "captcha_done": "Проверка уже пройдена",
     "no_subscription": "Сначала оформите подписку",
     "receipt_saved": "📎 Чек получен. Проверим перевод и зачислим деньги, обычно это недолго.",
     "receipt_no_payment": "Не нашли открытый перевод. Создайте счёт через «💰 Баланс».",
@@ -134,6 +140,24 @@ _RU: Final[Mapping[str, str]] = {
     "left_days": "{n} дн.",
     "left_hours": "{n} ч",
     "left_minutes": "{n} мин",
+    "left_days_hours": "{d} дн. {h} ч",
+    "size_gb": "{n} ГБ",
+    "size_mb": "{n} МБ",
+    # the «Подписка» section and its home button
+    "sub_btn_expired": "закончилась",
+    "sub_btn_paused": "на паузе",
+    "sub_state_active": "🟢 активна",
+    "sub_state_trial": "🎁 пробный период",
+    "sub_state_expired": "🔴 закончилась",
+    "sub_state_frozen": "⏸ на паузе",
+    "sub_state_pending": "⏳ подключается",
+    "sub_state_missing": "⚠️ временно недоступна",
+    "sub_used_of": "{used} из {limit}",
+    "sub_no_limit": "{used}, без лимита",
+    "sub_devices_upto": "до {limit}",
+    "sub_servers": "\nСерверы: {list}",
+    "sub_servers_more": "{list} и ещё {n}",
+    "sub_trial_line": "\n\n🎁 Можно попробовать бесплатно: {days} дн.",
 }
 
 _EN: Final[Mapping[str, str]] = {
@@ -227,6 +251,10 @@ _EN: Final[Mapping[str, str]] = {
     "trial_unavailable": "The trial is unavailable",
     "not_member_yet": "You have not joined the channel yet. Join it and tap again.",
     "channel_check_failed": "Could not check whether you joined. Try again in a minute.",
+    "captcha_wrong": "Wrong one, try again",
+    "captcha_cooldown": "Too many misses in a row. Wait a minute and try again",
+    "captcha_wait": "Please wait {seconds} more sec.",
+    "captcha_done": "You have already passed the check",
     "no_subscription": "Get a subscription first",
     "receipt_saved": "📎 Got the receipt. We will check the transfer and credit the money shortly.",
     "receipt_no_payment": "No open transfer found. Create an invoice in «💰 Balance».",
@@ -235,6 +263,23 @@ _EN: Final[Mapping[str, str]] = {
     "left_days": "{n} d",
     "left_hours": "{n} h",
     "left_minutes": "{n} min",
+    "left_days_hours": "{d} d {h} h",
+    "size_gb": "{n} GB",
+    "size_mb": "{n} MB",
+    "sub_btn_expired": "expired",
+    "sub_btn_paused": "paused",
+    "sub_state_active": "🟢 active",
+    "sub_state_trial": "🎁 trial",
+    "sub_state_expired": "🔴 expired",
+    "sub_state_frozen": "⏸ on hold",
+    "sub_state_pending": "⏳ setting up",
+    "sub_state_missing": "⚠️ temporarily unavailable",
+    "sub_used_of": "{used} of {limit}",
+    "sub_no_limit": "{used}, no limit",
+    "sub_devices_upto": "up to {limit}",
+    "sub_servers": "\nServers: {list}",
+    "sub_servers_more": "{list} and {n} more",
+    "sub_trial_line": "\n\n🎁 You can try it free for {days} days.",
 }
 
 _TEXTS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
@@ -306,6 +351,30 @@ def fmt_left(seconds: float, lang: str = "ru") -> str:
     if s >= 3_600:
         return t(lang, "left_hours", n=-(-int(s) // 3_600))
     return t(lang, "left_minutes", n=max(1, -(-int(s) // 60)))
+
+
+def fmt_left_short(seconds: float, lang: str = "ru") -> str:
+    """Time left on the «Подписка» button: «12 дн.» from 3 days up (days rounded up, like ``days_left``),
+    «2 дн. 5 ч» below 3 days, «5 ч» / «40 мин» below a day (rounded down: never more than there is)."""
+    s = max(0, int(seconds))
+    if s >= 3 * 86_400:
+        return t(lang, "left_days", n=-(-s // 86_400))
+    days, rest = divmod(s, 86_400)
+    hours = rest // 3_600
+    if days:
+        return t(lang, "left_days_hours", d=days, h=hours) if hours else t(lang, "left_days", n=days)
+    if hours:
+        return t(lang, "left_hours", n=hours)
+    return t(lang, "left_minutes", n=max(1, rest // 60))
+
+
+def fmt_bytes(value: int | None, lang: str = "ru") -> str:
+    """«1,5 ГБ» / «300 МБ» (binary units, one decimal for gigabytes)."""
+    n = max(0, int(value or 0))
+    if n >= 1024**3:
+        gb = f"{n / 1024**3:.1f}".rstrip("0").rstrip(".")
+        return t(lang, "size_gb", n=gb.replace(".", ",") if lang == "ru" else gb)
+    return t(lang, "size_mb", n=round(n / 1024**2))
 
 
 def plural_days(days: int, lang: str = "ru") -> str:

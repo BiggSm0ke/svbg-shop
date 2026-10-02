@@ -6,9 +6,14 @@ Seeding is additive and idempotent: a missing system screen is created, a missin
 
 :data:`SYSTEM_SCREENS` = the stage-0 screens (``menu_fallback``, ``error``, ``settings_root``) + the user path
 screens of :mod:`svbg.tg.user.seeds` (whose ``home`` replaces the stage-0 one) + the module buttons on
-``home`` (:data:`HOME_MODULE_BUTTONS`: «📦 Тарифы», «🛠 Админка», «🎟 Промокод», «🤝 Пригласить»,
-«ℹ️ Информация») + the screens :data:`INFO` (FAQ / rules / offer pages) and :data:`ADMIN_MENU` (every admin
-section, by role). It is computed on first access (PEP 562): the seeds module imports this one.
+``home`` (:data:`HOME_MODULE_BUTTONS`: «🛠 Админка» — the one staff entry —, «🎟 Промокод», «🤝 Пригласить»,
+«ℹ️ Информация») + the screen :data:`INFO` (FAQ / rules / offer pages). It is computed on first access
+(PEP 562): the seeds module imports this one.
+
+The admin itself is code (``svbg.tg.admin.menu``): ``admin`` — the code of the old content hub — is the same
+screen as ``adm``. The old staff buttons of ``home`` («⚙️ Настройки», «📦 Тарифы») are retired
+(:data:`RETIRED_SYSTEM_BUTTONS`): an install that still has them untouched loses them on the next start; a
+button the owner edited stays.
 
 Module buttons are shown only when the module is wired: the app adds ``flag:promo`` / ``flag:referral``
 (program on) / ``flag:pages`` to every user context. «💬 Поддержка» is not a content button: the home screen
@@ -37,7 +42,9 @@ __all__ = [
     "MENU_FALLBACK",
     "MODULE_SCREENS",
     "PLANS_BUTTON",
+    "RELAYOUT_SYSTEM_BUTTONS",
     "RESERVED_CODES",
+    "RETIRED_SYSTEM_BUTTONS",
     "SCREEN_ACCESS",
     "SETTINGS_ROOT",
     "SYSTEM_SCREENS",
@@ -110,15 +117,6 @@ BASE_SCREENS: Final[tuple[SeedScreen, ...]] = (
             "ru": _bold_first_line("👋 Добро пожаловать!\n\nВыберите, что хотите сделать."),
             "en": _bold_first_line("👋 Welcome!\n\nChoose what you want to do."),
         },
-        buttons=(
-            SeedButton(
-                system_key="settings",
-                label={"ru": "⚙️ Настройки", "en": "⚙️ Settings"},
-                action={"type": "screen", "target": SETTINGS_ROOT},
-                row=9,
-                visible_if={"role": {"gte": "admin"}},
-            ),
-        ),
     ),
     SeedScreen(
         code=MENU_FALLBACK,
@@ -162,7 +160,8 @@ SCREEN_ACCESS: Final[Mapping[str, ScreenAccess]] = MappingProxyType(
     {SETTINGS_ROOT: ScreenAccess(required_role="admin"), ADMIN_MENU: ScreenAccess(required_role="support")}
 )
 
-#: The owner's plan editor on the home screen (``svbg.tg.admin.plans``, screen ``plans``), admins only.
+#: The former «📦 Тарифы» of the home screen (now 🛠 Админка → 📦 Тарифы): kept to recognise an untouched
+#: seeded row (:data:`RETIRED_SYSTEM_BUTTONS`), never seeded again.
 PLANS_BUTTON: Final = SeedButton(
     system_key="plans",
     label={"ru": "📦 Тарифы", "en": "📦 Plans"},
@@ -176,7 +175,7 @@ _STAFF: Final = {"role": {"gte": "support"}}
 _ADMIN: Final = {"role": {"gte": "admin"}}
 _OWNER: Final = {"role": "owner"}
 
-#: «🛠 Админка» on the home screen (staff only) → the admin hub.
+#: «🛠 Админка» on the home screen (staff only) → the admin root (``admin`` is the code alias of ``adm``).
 ADMIN_BUTTON: Final = SeedButton(
     system_key="admin",
     label={"ru": "🛠 Админка", "en": "🛠 Admin"},
@@ -188,7 +187,6 @@ ADMIN_BUTTON: Final = SeedButton(
 
 #: User buttons of the stage 3–4 modules on the home screen (each hidden while its module is not wired).
 HOME_MODULE_BUTTONS: Final[tuple[SeedButton, ...]] = (
-    PLANS_BUTTON,
     ADMIN_BUTTON,
     SeedButton(
         system_key="promo",
@@ -248,8 +246,8 @@ INFO_SCREEN: Final = SeedScreen(
     ),
 )
 
-#: «🛠 Админка»: every admin section. Buttons only show what a role may open at all; each section checks its
-#: own right on every click (a support member without the right gets «Нет прав»).
+#: The former content hub «🛠 Админка» (stage 3). New installs do not get it: the admin is code now and the
+#: code screen ``admin`` shadows the row an older install still has.
 ADMIN_SCREEN: Final = SeedScreen(
     code=ADMIN_MENU,
     title={"ru": "Админка", "en": "Admin"},
@@ -278,11 +276,39 @@ ADMIN_SCREEN: Final = SeedScreen(
 )
 
 #: Screens of the stage 3–4 modules (seeded like every system screen).
-MODULE_SCREENS: Final[tuple[SeedScreen, ...]] = (INFO_SCREEN, ADMIN_SCREEN)
+MODULE_SCREENS: Final[tuple[SeedScreen, ...]] = (INFO_SCREEN,)
+
+#: The old «⚙️ Настройки» of the home screen (both seeds had the same row).
+_SETTINGS_BUTTON: Final = SeedButton(
+    system_key="settings",
+    label={"ru": "⚙️ Настройки", "en": "⚙️ Settings"},
+    action={"type": "screen", "target": SETTINGS_ROOT},
+    row=9,
+    visible_if={"role": {"gte": "admin"}},
+)
+
+#: ``(screen code, old seed)`` of system buttons that are no longer seeded. On start a row that still equals
+#: its old seed (label, action, condition) is deleted; a row the owner changed is left alone.
+RETIRED_SYSTEM_BUTTONS: Final[tuple[tuple[str, SeedButton], ...]] = (
+    (HOME, PLANS_BUTTON),
+    (HOME, _SETTINGS_BUTTON),
+)
 
 _system_screens: tuple[SeedScreen, ...] | None = None
 if TYPE_CHECKING:
     SYSTEM_SCREENS: tuple[SeedScreen, ...]  # provided by the module __getattr__ below
+    #: ``(screen code, old seed, new seed or None)`` of system buttons whose seed changed (the home layout of
+    #: the «Подписка» section): on start a row that still equals its old seed (label, action, condition, row,
+    #: order, colour) takes the new one, or goes away for ``None``; a row the owner changed is left alone.
+    RELAYOUT_SYSTEM_BUTTONS: tuple[tuple[str, SeedButton, SeedButton | None], ...]
+
+
+def _build_relayout() -> tuple[tuple[str, SeedButton, SeedButton | None], ...]:
+    try:
+        from svbg.tg.user.seeds import HOME_RELAYOUT
+    except ImportError:  # pragma: no cover - a tree without the user path
+        return ()
+    return tuple((HOME, old, new) for old, new in HOME_RELAYOUT)
 
 
 def _build_system_screens() -> tuple[SeedScreen, ...]:
@@ -309,4 +335,6 @@ def __getattr__(name: str) -> Any:
         if _system_screens is None:
             _system_screens = _build_system_screens()
         return _system_screens
+    if name == "RELAYOUT_SYSTEM_BUTTONS":
+        return _build_relayout()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

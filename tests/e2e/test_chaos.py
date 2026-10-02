@@ -44,7 +44,7 @@ def install_chaos_screen(app: App) -> None:
 def _screen_text(call: Call) -> str:
     media = call.params.get("media")
     caption = media.get("caption") if isinstance(media, dict) else None
-    return str(call.params.get("text") or call.params.get("caption") or caption or "")
+    return str(call.text or call.params.get("caption") or caption or "")
 
 
 async def _wait_screen(tg: Any, chat_id: int, start: int, timeout: float = 10.0) -> Call:
@@ -95,10 +95,10 @@ async def test_exception_in_screen_shows_fallback_and_reports_to_owner(
 
     start = len(tg.calls)
     tg.push_callback(user, encode("chaos", arg="fail"), main[user])
-    # the fallback screen is drawn without media (the fewest moving parts): after the home picture (the
-    # default banner) it comes as a new text message and the picture is deleted
+    # the fallback screen uploads nothing, but the default banner is cached already: after the home picture
+    # only the caption changes
     edit = await _wait_screen(tg, user, start)
-    assert edit.method == "sendMessage"
+    assert edit.method == "editMessageCaption"
     assert "Что-то пошло не так" in _screen_text(edit)
     main[user] = edit.result["message_id"]
     buttons = [b for row in edit.params["reply_markup"]["inline_keyboard"] for b in row]
@@ -107,11 +107,11 @@ async def test_exception_in_screen_shows_fallback_and_reports_to_owner(
     assert answer.ok
 
     report = await tg.wait_for(
-        "sendMessage",
+        "sendMessage|sendPhoto",
         lambda c: c.params.get("chat_id") == OWNER_ID and c.params.get("parse_mode") == "HTML",
         timeout=15,
     )
-    text = report.params["text"]
+    text = report.text
     assert "ChaosMonkey" in text
     assert "<blockquote expandable>" in text
     assert app_env.token.split(":")[1] not in text  # no secrets in the report
@@ -120,7 +120,9 @@ async def test_exception_in_screen_shows_fallback_and_reports_to_owner(
     start = len(tg.calls)
     tg.push_callback(user, encode("chaos", arg="ok"), main[user])
     ok = await _wait_screen(tg, user, start)
-    assert ok.method == "editMessageText" and _screen_text(ok) == "chaos ok ok"
+    assert (
+        ok.method == "editMessageCaption" and _screen_text(ok) == "chaos ok ok"
+    )  # code screens: the banner too
     assert app.runner is not None
 
 
@@ -181,9 +183,9 @@ async def test_chaos_1000_updates_10_percent_failing(start_app: StartApp, app_en
     reports = [
         c
         for c in tg.calls
-        if c.method == "sendMessage"
+        if c.method in ("sendMessage", "sendPhoto")
         and c.params.get("chat_id") == OWNER_ID
-        and "ChaosMonkey" in c.params["text"]
+        and "ChaosMonkey" in c.text
     ]
     assert len(reports) == 1
     groups = await app.hub.open_groups()

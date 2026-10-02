@@ -28,13 +28,17 @@ __all__ = [
     "Card",
     "EventRow",
     "LedgerRow",
+    "ListRow",
     "OrderRow",
     "PaymentRow",
+    "banned_users",
     "load_card",
     "load_events",
     "load_ledger",
     "load_orders",
     "load_payments",
+    "recent_payers",
+    "recent_users",
 ]
 
 PAGE: Final = 10
@@ -74,6 +78,7 @@ class Card:
     paid_total_minor: int = 0  # in the shop currency
     last_paid_at: datetime | None = None
     orders_count: int = 0
+    captcha_passed: bool = True  # the entry captcha (``users.captcha_passed_at``)
 
     @property
     def live(self) -> bool:
@@ -160,6 +165,7 @@ async def load_card(conn: AsyncConnection, user_id: int, *, currency: str) -> Ca
             users.c.banned_at,
             users.c.bot_blocked_at,
             users.c.wallet_minor,
+            users.c.captcha_passed_at,
             sub,
             pay.c.paid_count,
             pay.c.paid_total,
@@ -210,6 +216,7 @@ async def load_card(conn: AsyncConnection, user_id: int, *, currency: str) -> Ca
         paid_total_minor=int(row["paid_total"] or 0),
         last_paid_at=row["last_paid_at"],
         orders_count=int(row["orders_count"] or 0),
+        captcha_passed=row["captcha_passed_at"] is not None,
     )
 
 
@@ -409,4 +416,64 @@ async def load_events(
             r.amount,
         )
         for r in (await conn.execute(stmt)).all()
+    ]
+
+
+# ------------------------------------------------------------------ lists of «👥 Пользователи»
+
+
+@dataclass(frozen=True, slots=True)
+class ListRow:
+    user_id: int
+    first_name: str | None
+    username: str | None
+    at: datetime | None
+    amount_minor: int | None = None
+    currency: str | None = None
+
+
+async def recent_users(conn: AsyncConnection, *, limit: int = 20) -> list[ListRow]:
+    """The newest users (index ``ix_users_created_at``)."""
+    stmt = (
+        sa.select(users.c.id, users.c.first_name, users.c.username, users.c.created_at)
+        .order_by(users.c.created_at.desc(), users.c.id.desc())
+        .limit(limit)
+    )
+    return [
+        ListRow(int(r.id), r.first_name, r.username, r.created_at) for r in (await conn.execute(stmt)).all()
+    ]
+
+
+async def recent_payers(conn: AsyncConnection, *, limit: int = 20) -> list[ListRow]:
+    """The latest real payments (no test, no imported ones; index ``ix_payments_paid_at``)."""
+    stmt = (
+        sa.select(
+            payments.c.user_id,
+            users.c.first_name,
+            users.c.username,
+            payments.c.paid_at,
+            sa.func.coalesce(payments.c.paid_amount_minor, payments.c.amount_minor).label("amount"),
+            sa.func.coalesce(payments.c.paid_currency, payments.c.currency).label("currency"),
+        )
+        .join(users, users.c.id == payments.c.user_id)
+        .where(payments.c.status == "paid", sa.not_(payments.c.is_test), sa.not_(payments.c.is_imported))
+        .order_by(payments.c.paid_at.desc())
+        .limit(limit)
+    )
+    return [
+        ListRow(int(r.user_id), r.first_name, r.username, r.paid_at, int(r.amount), str(r.currency))
+        for r in (await conn.execute(stmt)).all()
+    ]
+
+
+async def banned_users(conn: AsyncConnection, *, limit: int = 20) -> list[ListRow]:
+    """Users banned in the bot, the latest first."""
+    stmt = (
+        sa.select(users.c.id, users.c.first_name, users.c.username, users.c.banned_at)
+        .where(users.c.banned_at.is_not(None))
+        .order_by(users.c.banned_at.desc())
+        .limit(limit)
+    )
+    return [
+        ListRow(int(r.id), r.first_name, r.username, r.banned_at) for r in (await conn.execute(stmt)).all()
     ]
