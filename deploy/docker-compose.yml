@@ -1,13 +1,14 @@
 # Пример для ручной установки без установщика (бот + свой PostgreSQL). Установщик deploy/install.sh пишет
 # свой /opt/svbg/docker-compose.yml сам, этот файл ему не нужен.
-# Образ собирается из исходников: docker build -t svbg-shop:local .  (публичного образа нет)
+# Образ готовый, для amd64 и arm64. Чтобы закрепить версию, поменяйте latest на тег вроде 1.2.0.
+# Собрать самому: docker build -t svbg-shop:local . и впишите svbg-shop:local в image.
 # Настройки бота лежат в data/.env или в самом боте (/settings). Если панели Remnawave на этом сервере нет,
 # уберите четыре строки про сеть remnawave-network (они помечены комментарием).
 name: svbg
 
 services:
   bot:
-    image: svbg-shop:local
+    image: ghcr.io/biggsm0ke/svbg-shop:latest
     container_name: svbg-shop
     hostname: svbg-shop                      # бот строит сниппеты вебхуков из этого имени
     restart: unless-stopped

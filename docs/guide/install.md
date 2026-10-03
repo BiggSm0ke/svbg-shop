@@ -19,7 +19,15 @@ git clone https://github.com/BiggSm0ke/svbg-shop.git /opt/svbg-shop
 cd /opt/svbg-shop
 ```
 
-Папка с кодом нужна и после установки: из неё собирается образ (`docker build -t svbg-shop:local .`, публичного образа нет) и в ней `svbg update` делает `git pull`. Её путь установщик запоминает в `/opt/svbg/install.conf`.
+Папка с кодом нужна и после установки: в ней `svbg update` делает `git pull` за свежими скриптами, а если вы решили собирать образ сами, он собирается отсюда. Её путь установщик запоминает в `/opt/svbg/install.conf`.
+
+## Образ бота
+
+Готовый образ лежит в GitHub Container Registry: `ghcr.io/biggsm0ke/svbg-shop`, для amd64 и arm64. Его собирает GitHub Actions: тег `latest` и `sha-<коммит>` на каждый коммит в main, теги вида `1.2.0` и `1.2` на релизы. Установщик образ только скачивает, сервер ничего не компилирует.
+
+Закрепить версию: `SVBG_IMAGE=ghcr.io/biggsm0ke/svbg-shop:1.2.0 svbg update`. Тег запоминается в `/opt/svbg/install.conf` (строка `IMAGE=`), следующие `svbg update` его не меняют. Вернуться на свежие версии: то же самое с `:latest`.
+
+Собрать образ на своём сервере: пункт меню установщика «Образ бота» → «Собрать образ на этом сервере» или `SVBG_BUILD_LOCAL=1 svbg update` (`SVBG_BUILD_LOCAL=0` вернёт готовый). Если скачать образ не получилось, установщик соберёт его сам и предупредит. Сборка идёт 3–7 минут, на сервере с памятью меньше 2 ГБ она может подвесить его, поэтому перед ней установщик проверяет, что есть swap.
 
 ## Запуск
 
@@ -48,7 +56,7 @@ sudo bash deploy/install.sh
 3. Caddy в `/opt/caddy` в сети `remnawave-network`. Сертификаты Let's Encrypt он получает сам для всех трёх адресов.
 4. Админ панели и API-токен через API панели: `GET /api/auth/status`, затем `POST /api/auth/register` (или `/api/auth/login`, если админ уже есть) и `POST /api/tokens` с правами `*` на 10 лет. Запросы идут на `http://127.0.0.1:3000` с заголовками `X-Forwarded-For` и `X-Forwarded-Proto: https`, без них панель соединение закрывает.
 5. Страница подписки в `/opt/remnawave/subscription`: образ `remnawave/subscription-page`, `REMNAWAVE_PANEL_URL=http://remnawave:3000`, `TRUST_PROXY=1` и свой API-токен.
-6. Бот: база `svbg` и роль `svbg` в PostgreSQL панели, сборка образа, настройки, запуск.
+6. Бот: база `svbg` и роль `svbg` в PostgreSQL панели, готовый образ с ghcr.io, настройки, запуск.
 7. `ufw allow 80/tcp` и `443/tcp`, если ufw включён. Если выключен, установщик его не включает.
 
 Пароль админа Remnawave принимает только длиной от 24 символов, с заглавными и строчными латинскими буквами и цифрами. Установщик проверит это до отправки. Пароль нигде не сохраняется.
@@ -77,7 +85,7 @@ sudo bash deploy/install.sh
 | `/opt/svbg/data/` | данные бота (права 700, владелец uid 1000): `.env`, бэкапы, картинки |
 | `/opt/svbg/data/.env` | все настройки бота. Синхронизирован с `/settings` |
 | `/opt/svbg/data/.pg_password` | пароль роли `svbg` в PostgreSQL |
-| `/opt/svbg/install.conf` | что выбрано при установке: режим, домены, сеть. Без секретов |
+| `/opt/svbg/install.conf` | что выбрано при установке: режим, домены, сеть, образ. Без секретов |
 | `/opt/svbg/pg/` | данные своего PostgreSQL, если бот не в базе панели |
 | `/opt/remnawave/` | панель Remnawave (`docker-compose.yml`, `.env`) |
 | `/opt/remnawave/subscription/` | страница подписки |
@@ -124,20 +132,25 @@ svbg update
 
 То же, что пункт «Обновить» в меню установщика:
 
-1. `git pull --ff-only` в папке с кодом (от имени владельца папки, если это не root).
-2. Сборка нового образа. Прежний сохраняется как `svbg-shop:previous`.
-3. Бэкап `pre_update`. Если он не получился, обновление останавливается (`svbg update --force` пропустит бэкап).
-4. Бот останавливается, миграции базы (`python -m svbg migrate`, перед изменением схемы он сам делает ещё бэкап `pre_migrate`).
-5. Запуск и проверка, что бот отвечает.
+1. `git pull --ff-only` в папке с кодом (от имени владельца папки, если это не root). Если при этом поменялся сам установщик, дальше работает уже новая версия.
+2. `docker pull` образа (или сборка, если вы её выбрали). Прежний образ сохраняется как `svbg-shop:previous`.
+3. Если ни образ, ни скрипты в `deploy/` не поменялись, на этом всё: установщик так и скажет, бот продолжит работать без перезапуска.
+4. Бэкап `pre_update`. Если он не получился, обновление останавливается (`svbg update --force` пропустит бэкап).
+5. Бот останавливается, миграции базы (`python -m svbg migrate`, перед изменением схемы он сам делает ещё бэкап `pre_migrate`).
+6. Запуск и проверка, что бот отвечает.
 
-Не смог сделать `git pull` (нет сети до GitHub или в папке есть локальные правки): предупредит и соберёт то, что лежит в папке.
+Не смог сделать `git pull` (нет сети до GitHub или в папке есть локальные правки): предупредит и продолжит со скриптами, что лежат в папке.
+
+Установки, где образ раньше собирался на сервере (`svbg-shop:local`), при обновлении переходят на готовый образ, если в `install.conf` не выбрана сборка. Старый установщик об этом не знает, поэтому в первый раз сделайте `git -C /opt/svbg-shop pull` и только потом `svbg update`.
 
 Откат:
 
 ```bash
-docker tag svbg-shop:previous svbg-shop:local && svbg restart
+docker tag svbg-shop:previous ghcr.io/biggsm0ke/svbg-shop:latest && svbg up
 svbg restore /opt/svbg/data/backups/<файл pre_update>   # если миграции уже поменяли базу
 ```
+
+Если версия закреплена или образ собран на сервере, вместо `ghcr.io/biggsm0ke/svbg-shop:latest` подставьте тег из `svbg status` (строка «Образ»).
 
 ## Бэкап и восстановление
 
@@ -159,7 +172,7 @@ svbg restore /opt/svbg/data/backups/<файл pre_update>   # если мигр�
 Пример compose с ботом и своим PostgreSQL: `deploy/docker-compose.yml`.
 
 ```bash
-docker build -t svbg-shop:local /opt/svbg-shop
+docker pull ghcr.io/biggsm0ke/svbg-shop:latest
 mkdir -p /opt/svbg/data && chown 1000:1000 /opt/svbg/data && chmod 700 /opt/svbg/data
 cp /opt/svbg-shop/deploy/docker-compose.yml /opt/svbg/
 openssl rand -hex 24 > /opt/svbg/data/.pg_password && chmod 644 /opt/svbg/data/.pg_password
@@ -168,3 +181,5 @@ docker compose run --rm --no-deps bot python -m svbg env init
 ```
 
 Затем впишите в `data/.env` `BOT_TOKEN` и `DATABASE_URL=postgresql://svbg:<пароль из .pg_password>@db:5432/svbg` и запустите `docker compose up -d`. Если панели на этом сервере нет, уберите из compose четыре помеченные строки сети `remnawave-network`. Наружу публикуйте только через reverse proxy с HTTPS (порт бота `127.0.0.1:8080`), пути те же, что в разделе про Caddy.
+
+Свой образ вместо готового: `docker build -t svbg-shop:local /opt/svbg-shop` и `image: svbg-shop:local` в compose.

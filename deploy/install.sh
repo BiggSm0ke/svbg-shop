@@ -8,6 +8,11 @@
 # сервере / только бот (панель на другом сервере) / обновить / статус / удалить.
 # Без меню: install.sh --update [--force] | --status (так их вызывает команда svbg).
 #
+# Образ бота скачивается готовым из ghcr.io (его собирает GitHub Actions для amd64 и arm64). На сервере он
+# собирается, только если так выбрал владелец (SVBG_BUILD_LOCAL=1 или пункт меню) или скачать не вышло.
+# Свой тег, например закреплённую версию: SVBG_IMAGE=ghcr.io/biggsm0ke/svbg-shop:1.2.0. Оба выбора
+# запоминаются в install.conf.
+#
 # Повторный запуск ничего не ломает: готовое не пересоздаётся, секреты не перегенерируются.
 # Лог: /var/log/svbg-install.log. Токены и пароли не пишутся ни в лог, ни на экран и не попадают в командную
 # строку процессов (её видно через ps): curl, jq, awk и контейнер получают их через stdin или окружение.
@@ -24,7 +29,10 @@ RW_DIR=${RW_DIR:-/opt/remnawave}
 SUB_DIR=$RW_DIR/subscription
 CADDY_DIR=${CADDY_DIR:-/opt/caddy}
 LOG=${SVBG_LOG:-/var/log/svbg-install.log}
-IMAGE=svbg-shop:local
+IMAGE_DEFAULT=ghcr.io/biggsm0ke/svbg-shop:latest
+LOCAL_IMAGE=svbg-shop:local
+PREV_IMAGE=svbg-shop:previous
+LOW_MEM=1800
 RW_RAW=https://raw.githubusercontent.com/remnawave/backend/refs/heads/main
 BOT_HOOK=http://svbg-shop:8080/webhooks/remnawave
 # Секрет вебхуков из .env.sample панели: он публичный, оставлять его нельзя.
@@ -35,8 +43,12 @@ WW=76
 export DEBIAN_FRONTEND=noninteractive GIT_TERMINAL_PROMPT=0
 
 # Выбор владельца. Сохраняется в install.conf (секретов там нет).
+# IMAGE: откуда скачивать образ; BUILD_LOCAL=1: собирать его на этом сервере.
 MODE="" NET="" DB_MODE="" PANEL_DOMAIN="" SUB_DOMAIN="" BOT_DOMAIN="" RW_URL="" BOT_NAME="" RW_TOKEN_SET="" SVBG_SRC=""
-STATE_KEYS=(MODE NET DB_MODE PANEL_DOMAIN SUB_DOMAIN BOT_DOMAIN RW_URL BOT_NAME RW_TOKEN_SET SVBG_SRC)
+IMAGE="" BUILD_LOCAL=""
+STATE_KEYS=(MODE NET DB_MODE PANEL_DOMAIN SUB_DOMAIN BOT_DOMAIN RW_URL BOT_NAME RW_TOKEN_SET SVBG_SRC IMAGE BUILD_LOCAL)
+# Образ, который сейчас пойдёт в compose: $IMAGE или svbg-shop:local после сборки.
+BOT_IMAGE=""
 # Секреты: живут только в памяти этого запуска.
 BOT_TOKEN="" RW_TOKEN="" RW_AUTH="" ADMIN_USER="" ADMIN_PASS="" HOOK_SECRET="" PG_PASS="" DATABASE_URL=""
 OWNER_ID="" ADMIN_CHAT="" ADMIN_ACTION="" FIRST_INSTALL="" FORCE=""
@@ -293,7 +305,7 @@ check_disk() { # check_disk МБ
 ensure_swap() {
     local mem size free
     mem=$(mem_mb)
-    if ((mem >= 1800)); then
+    if ((mem >= LOW_MEM)); then
         ok "Память: $mem МБ, swap не нужен"
         return 0
     fi
@@ -309,7 +321,7 @@ ensure_swap() {
     size=2048
     if ((free - 4096 < size)); then size=$((free - 4096)); fi
     if ((size < 512)); then
-        warn "Памяти $mem МБ, а под swap места не хватает. Сборка образа может упасть по памяти."
+        warn "Памяти $mem МБ, а места на диске под swap не хватает."
         return 0
     fi
     step "Памяти всего $mem МБ, добавляю swap на $size МБ (/swapfile)"
@@ -898,8 +910,8 @@ SQL
     ok "База бота: отдельная база svbg в PostgreSQL панели"
 }
 
-render_compose() {
-    local f=$SVBG_DIR/docker-compose.yml
+render_compose() { # render_compose [файл]: по умолчанию $SVBG_DIR/docker-compose.yml
+    local f=${1:-$SVBG_DIR/docker-compose.yml}
     mkdir -p "$SVBG_DIR"
     {
         cat <<YML
@@ -909,7 +921,7 @@ name: svbg
 
 services:
   bot:
-    image: $IMAGE
+    image: ${BOT_IMAGE:-$IMAGE_DEFAULT}
     container_name: svbg-shop
     hostname: svbg-shop
     restart: unless-stopped
@@ -975,13 +987,102 @@ YML
     log "записан $f (сеть $NET, база $DB_MODE)"
 }
 
+# ------------------------------------------------------------------------------------------------ образ бота
+
+# Откуда брать образ: install.conf, поверх него переменные SVBG_IMAGE и SVBG_BUILD_LOCAL.
+# Старые установки (svbg-shop:local, в install.conf про образ ничего нет) переходят на готовый образ.
+image_prefs() {
+    if [[ -n ${SVBG_IMAGE-} ]]; then IMAGE=$SVBG_IMAGE; fi
+    case ${SVBG_BUILD_LOCAL-} in
+        1 | yes | true) BUILD_LOCAL=1 ;;
+        0 | no | false) BUILD_LOCAL="" ;;
+    esac
+    if [[ $IMAGE == "$LOCAL_IMAGE" ]]; then BUILD_LOCAL=1 IMAGE=""; fi
+    IMAGE=${IMAGE:-$IMAGE_DEFAULT}
+    if [[ $BUILD_LOCAL == 1 ]]; then BOT_IMAGE=$LOCAL_IMAGE; else BOT_IMAGE=$IMAGE; fi
+}
+
+image_label() {
+    if [[ $BUILD_LOCAL == 1 ]]; then printf 'соберу на этом сервере из %s' "$SRC_DIR"; else printf '%s' "$IMAGE"; fi
+}
+
+# ID образа, на котором сейчас стоит контейнер бота (пусто, если контейнера нет).
+bot_image_id() { docker container inspect -f '{{.Image}}' svbg-shop 2>/dev/null || true; }
+image_id() { docker image inspect -f '{{.Id}}' "$1" 2>/dev/null || true; }
+
+# image_digest образ: короткий дайджест из ghcr.io и коммит, или ID, если образ собран здесь.
+image_digest() {
+    local d rev
+    d=$(docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$1" 2>/dev/null |
+        sed -n 's/.*@sha256:\([0-9a-f]\{12\}\).*/\1/p' | head -n 1) || d=""
+    if [[ -z $d ]]; then
+        d=$(image_id "$1")
+        d=${d#sha256:}
+        printf 'id %s, собран на сервере' "${d:0:12}"
+        return 0
+    fi
+    printf 'sha256:%s' "$d"
+    rev=$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$1" 2>/dev/null) || rev=""
+    if [[ $rev =~ ^[0-9a-f]{7,}$ ]]; then printf ', коммит %s' "${rev:0:7}"; fi
+}
+
+image_status() {
+    local ref id
+    ref=$(docker container inspect -f '{{.Config.Image}}' svbg-shop 2>/dev/null) || ref=""
+    id=$(bot_image_id)
+    if [[ -z $ref ]]; then
+        ref=$BOT_IMAGE
+        id=$(image_id "$ref")
+    fi
+    if [[ -z $id ]]; then
+        printf '%s (на сервере его нет)' "$ref"
+    else
+        printf '%s (%s)' "$ref" "$(image_digest "$id")"
+    fi
+}
+
 bot_build() {
+    local mem
     [[ -f $SRC_DIR/Dockerfile ]] ||
         die "Не нашёл Dockerfile в $SRC_DIR. Запускайте установщик из папки репозитория: sudo bash deploy/install.sh"
+    mem=$(mem_mb)
+    if ((mem < LOW_MEM)); then
+        warn "Памяти $mem МБ, а сборка может подвесить такой сервер на несколько минут. Сначала проверю swap."
+        ensure_swap
+    fi
     step "Собираю образ бота из $SRC_DIR (первый раз 3–7 минут)"
-    if docker image inspect "$IMAGE" >/dev/null 2>&1; then run docker tag "$IMAGE" svbg-shop:previous; fi
-    DOCKER_BUILDKIT=1 run docker build -t "$IMAGE" "$SRC_DIR" || die "Образ не собрался, причина в логе."
-    ok "Образ $IMAGE готов"
+    DOCKER_BUILDKIT=1 run docker build -t "$LOCAL_IMAGE" "$SRC_DIR" || die "Образ не собрался, причина в логе."
+    BOT_IMAGE=$LOCAL_IMAGE
+    ok "Образ $LOCAL_IMAGE готов"
+}
+
+# Готовый образ из ghcr.io. Собираем здесь, только если так выбрал владелец или скачать не вышло.
+bot_image() {
+    if [[ $BUILD_LOCAL == 1 ]]; then
+        bot_build
+        return 0
+    fi
+    step "Скачиваю образ бота $IMAGE"
+    if run docker pull "$IMAGE"; then
+        BOT_IMAGE=$IMAGE
+        ok "Образ готов: $(image_digest "$IMAGE")"
+        return 0
+    fi
+    warn "Образ $IMAGE не скачался (нет доступа к ghcr.io или такого тега нет). Соберу его здесь из исходников."
+    bot_build
+}
+
+# keep_previous старый_id новый_id: прежний образ остаётся под тегом svbg-shop:previous, на него можно откатиться.
+keep_previous() {
+    if [[ -n $1 && $1 != "$2" ]]; then run docker tag "$1" "$PREV_IMAGE" || true; fi
+}
+
+# Старые образы бота, на которые больше ничего не ссылается. Чужие образы не трогаем.
+drop_stale_images() {
+    if [[ $BOT_IMAGE != "$LOCAL_IMAGE" && -n $(image_id "$LOCAL_IMAGE") ]]; then
+        run docker image rm "$LOCAL_IMAGE" || true
+    fi
+    run docker image prune -f --filter "label=org.opencontainers.image.title=SvBG Shop" || true
 }
 
 # Строки KEY=VALUE для data/.env. Только то, что спросили в этом запуске: остальное не трогаем.
@@ -1030,16 +1131,18 @@ install_cli() {
 }
 
 bot_install() {
-    local was_running=""
+    local was_running="" cur_id
     step "Бот SvBG Shop ($SVBG_DIR)"
     mkdir -p "$DATA"
     chown 1000:1000 "$DATA"
     chmod 0700 "$DATA"
     if [[ ! -s $DATA/.env ]]; then FIRST_INSTALL=1; fi
     if bot_running; then was_running=1; fi
+    cur_id=$(bot_image_id)
     db_setup
+    bot_image
+    keep_previous "$cur_id" "$(image_id "$BOT_IMAGE")"
     render_compose
-    bot_build
     run compose_bot run --rm --no-deps -T bot python -m svbg env init </dev/null ||
         die "Не создался $DATA/.env, причина в логе."
     bot_settings
@@ -1271,6 +1374,7 @@ load_state() {
         # shellcheck source=/dev/null
         . "$STATE"
     fi
+    image_prefs
 }
 
 containers_table() {
@@ -1297,6 +1401,7 @@ status_text() {
     if [[ -n $RW_URL ]]; then printf '  %-18s %s\n' "Бот ходит в панель" "$RW_URL"; fi
     echo
     printf 'Бот: %s. База: %s.\n' "$health" "$db"
+    printf 'Образ: %s\n' "$(image_status)"
     echo
     printf '  %-30s %-10s %s\n' "Контейнер" "Состояние" "Память"
     containers_table
@@ -1395,6 +1500,7 @@ flow_full() {
 Бот ходит в:       $RW_URL
 Владелец:          $(owner_label)
 База бота:         отдельная база svbg в PostgreSQL панели
+Образ бота:        $(image_label)
 "
     ensure_swap
     ensure_docker
@@ -1442,6 +1548,7 @@ flow_near() {
 Вебхуки панели:  допишу $BOT_HOOK в .env панели и перезапущу её
 Владелец:        $(owner_label)
 База бота:       $db_label
+Образ бота:      $(image_label)
 "
     ensure_swap
     if [[ $DB_MODE == own ]]; then ensure_network "$NET"; fi
@@ -1513,6 +1620,7 @@ flow_remote() {
 Бот:             ${BOT_DOMAIN:+https://$BOT_DOMAIN}${BOT_DOMAIN:-без домена (кассы с вебхуками подключатся позже)} ${BOT_NAME:+(@$BOT_NAME)}
 Владелец:        $(owner_label)
 База бота:       свой контейнер postgres:17-alpine
+Образ бота:      $(image_label)
 "
     check_disk 3072
     ensure_swap
@@ -1538,27 +1646,65 @@ flow_remote() {
 git_pull() {
     local owner g
     if [[ ! -d $SRC_DIR/.git ]]; then
-        warn "$SRC_DIR не git-репозиторий: собираю из того, что лежит"
+        warn "$SRC_DIR не git-репозиторий, скрипты не обновляю"
         return 0
     fi
-    step "Забираю свежий код (git pull)"
+    step "Забираю свежие скрипты (git pull)"
     owner=$(stat -c %U "$SRC_DIR")
     g=(git -C "$SRC_DIR" -c "safe.directory=$SRC_DIR" pull --ff-only)
     if [[ $owner != root ]] && id "$owner" >/dev/null 2>&1; then g=(runuser -u "$owner" -- "${g[@]}"); fi
     if run "${g[@]}"; then
         ok "Код: $(git -C "$SRC_DIR" -c "safe.directory=$SRC_DIR" log -1 --format='%h %s' 2>/dev/null || echo обновлён)"
     else
-        warn "git pull не прошёл (нет сети до GitHub или есть локальные правки). Проверьте: git -C $SRC_DIR status. Собираю текущую версию."
+        warn "git pull не прошёл (нет сети до GitHub или есть локальные правки). Проверьте: git -C $SRC_DIR status. Продолжаю с тем, что лежит в папке."
     fi
 }
 
+src_rev() { git -C "$SRC_DIR" -c "safe.directory=$SRC_DIR" rev-parse -q --verify HEAD 2>/dev/null || true; }
+
+# scripts_changed коммит: поменялось ли что-то в deploy/ с этого коммита до текущего.
+scripts_changed() {
+    local new
+    new=$(src_rev)
+    if [[ -z $1 || -z $new || $1 == "$new" ]]; then return 1; fi
+    ! git -C "$SRC_DIR" -c "safe.directory=$SRC_DIR" diff --quiet "$1" "$new" -- deploy/ 2>/dev/null
+}
+
 flow_update() {
+    local from sum cur_id new_id tmp same_compose="" args=(--update)
     load_state
     [[ -f $SVBG_DIR/docker-compose.yml && -n $NET ]] ||
         die "Бот не установлен этим установщиком. Запустите: sudo bash $SRC_DIR/deploy/install.sh"
-    step "Обновление SvBG Shop"
-    git_pull
-    bot_build
+    if [[ -n ${SVBG_UPDATE_FROM+x} ]]; then
+        # Сюда попадаем из прежней версии установщика: git pull она уже сделала.
+        from=$SVBG_UPDATE_FROM
+        unset SVBG_UPDATE_FROM
+    else
+        step "Обновление SvBG Shop"
+        from=$(src_rev)
+        sum=$(file_sum "$SCRIPT_DIR/install.sh")
+        git_pull
+        if [[ $(file_sum "$SCRIPT_DIR/install.sh") != "$sum" ]]; then
+            ok "Установщик обновился, дальше работает новая версия"
+            if [[ $FORCE == 1 ]]; then args+=(--force); fi
+            export SVBG_UPDATE_FROM=$from
+            exec bash "$SCRIPT_DIR/install.sh" "${args[@]}"
+        fi
+    fi
+    cur_id=$(bot_image_id)
+    bot_image
+    new_id=$(image_id "$BOT_IMAGE")
+    tmp=$(mktemp)
+    render_compose "$tmp"
+    if [[ $(file_sum "$tmp") == "$(file_sum "$SVBG_DIR/docker-compose.yml")" ]]; then same_compose=1; fi
+    rm -f "$tmp"
+    if [[ -n $cur_id && $cur_id == "$new_id" && -n $same_compose ]] && ! scripts_changed "$from" && bot_running; then
+        install_cli
+        save_state
+        ok "Образ и скрипты те же, что уже работают. Бот не перезапускаю."
+        return 0
+    fi
+    keep_previous "$cur_id" "$new_id"
     if bot_running; then
         step "Бэкап перед обновлением"
         if docker exec svbg-shop python -m svbg backup --reason pre_update >>"$LOG" 2>&1; then
@@ -1572,10 +1718,11 @@ flow_update() {
     if [[ $DB_MODE == own ]]; then ensure_network "$NET"; fi
     render_compose
     install_cli
+    save_state
     step "Миграции базы"
     run compose_bot stop bot || true
     if ! run compose_bot run --rm -T bot python -m svbg migrate </dev/null; then
-        warn "Миграции не прошли. Откат: docker tag svbg-shop:previous $IMAGE && svbg up"
+        warn "Миграции не прошли. Откат: docker tag $PREV_IMAGE $BOT_IMAGE && svbg up"
         die "Миграции не прошли, бот остановлен. Причина в логе."
     fi
     ok "База в актуальной схеме"
@@ -1583,12 +1730,15 @@ flow_update() {
     if bot_wait; then
         ok "Бот обновлён и отвечает"
     else
-        warn "Бот не ответил на проверку. Посмотрите svbg logs. Откат: docker tag svbg-shop:previous $IMAGE && svbg restart"
+        warn "Бот не ответил на проверку. Посмотрите svbg logs. Откат: docker tag $PREV_IMAGE $BOT_IMAGE && svbg up"
     fi
-    echo
-    echo "Если что-то пошло не так, прежний образ сохранён как svbg-shop:previous:"
-    echo "  docker tag svbg-shop:previous $IMAGE && svbg restart"
-    echo "  и при необходимости: svbg restore $DATA/backups/<файл pre_update>"
+    drop_stale_images
+    if [[ -n $cur_id && $cur_id != "$new_id" ]]; then
+        echo
+        echo "Если что-то пошло не так, прежний образ сохранён как $PREV_IMAGE:"
+        echo "  docker tag $PREV_IMAGE $BOT_IMAGE && svbg up"
+        echo "  и при необходимости: svbg restore $DATA/backups/<файл pre_update>"
+    fi
 }
 
 flow_remove() {
@@ -1629,7 +1779,7 @@ DROP DATABASE IF EXISTS svbg WITH (FORCE);
 DROP ROLE IF EXISTS svbg;
 SQL
     fi
-    run docker image rm "$IMAGE" svbg-shop:previous || true
+    run docker image rm "$IMAGE" "$LOCAL_IMAGE" "$PREV_IMAGE" || true
     rm -f "$SVBG_BIN"
     if [[ $wipe == 1 ]]; then
         rm -rf "$SVBG_DIR"
@@ -1645,9 +1795,31 @@ usage() {
 SvBG Shop: установщик.
 
   sudo bash deploy/install.sh            меню: установка, обновление, статус, удаление
-  sudo bash deploy/install.sh --update   обновить бота (git pull, сборка, бэкап, миграции, перезапуск)
+  sudo bash deploy/install.sh --update   обновить бота (git pull, свежий образ, бэкап, миграции, перезапуск)
   sudo bash deploy/install.sh --status   что запущено и сколько памяти занято
+
+Образ бота (выбор запоминается в /opt/svbg/install.conf):
+  SVBG_IMAGE=ghcr.io/biggsm0ke/svbg-shop:1.2.0   скачивать этот тег вместо latest
+  SVBG_BUILD_LOCAL=1                            собирать образ на этом сервере (0 вернёт готовый)
 TXT
+}
+
+# Пункт меню «Образ бота»: скачивать готовый или собирать здесь.
+choose_image() {
+    local how cur=pull mem
+    mem=$(mem_mb)
+    if [[ $BUILD_LOCAL == 1 ]]; then cur=build; fi
+    choose how "Образ бота" "Обычно установщик скачивает готовый образ:
+  $IMAGE
+Его собирает GitHub для amd64 и arm64.
+
+Собрать образ можно и здесь, из $SRC_DIR. Это 3–7 минут, а памяти у сервера $mem МБ: если она меньше 2 ГБ, сборка может подвесить сервер." "$cur" \
+        pull "Скачивать готовый образ" \
+        build "Собрать образ на этом сервере"
+    if [[ $how == build ]]; then BUILD_LOCAL=1; else BUILD_LOCAL=""; fi
+    if [[ -f $STATE ]]; then save_state; fi
+    ui_msg "Образ бота" "Запомнил: $(image_label).
+Сработает при установке или обновлении."
 }
 
 main() {
@@ -1694,6 +1866,7 @@ main() {
             remote "Только бот, панель на другом сервере" \
             update "Обновить бота" \
             status "Статус" \
+            image "Образ бота: скачать готовый или собрать здесь" \
             remove "Удалить бота" \
             quit "Выход"
         case $choice in
@@ -1719,6 +1892,7 @@ main() {
                 break
                 ;;
             status) ui_msg "Статус" "$(status_text 2>/dev/null || echo 'Docker не установлен')" ;;
+            image) choose_image ;;
             remove)
                 flow_remove
                 break
