@@ -74,6 +74,7 @@ __all__ = [
     "UPDATE_FIELDS",
     "DeviceJobs",
     "PanelWriter",
+    "delete_panel_user",
     "emergency_set_squads",
     "enqueue_action",
     "enqueue_create",
@@ -1202,10 +1203,19 @@ class DeviceJobs:
 
 
 async def emergency_set_squads(api: RemnawaveApi, panel_user_id: int, squads: Sequence[str]) -> None:
-    """The only panel write allowed outside the outbox: ``svbg lte release --panel-only`` when the bot and
+    """A panel write allowed outside the outbox: ``svbg lte release --panel-only`` when the bot and
     its database are down (05 §2.1, the owner's emergency switch). One absolute ``PATCH`` of
     ``activeInternalSquads``; an empty list is refused (it would take the user off every node)."""
     items = [str(s) for s in squads if str(s)]
     if not items:
         raise ValueError("пустой список сквадов снял бы пользователя со всех нод — не отправляем")
     await api.update_user(int(panel_user_id), active_internal_squads=items, lane=Lane.BACKGROUND)
+
+
+async def delete_panel_user(api: RemnawaveApi, panel_user_id: int) -> bool:
+    """The other write outside the outbox: «🗑 Удалить полностью» in the admin's user card
+    (:mod:`svbg.services.user_delete`). The admin has to see the panel's answer before the bot forgets the
+    user, and the subscription rows a ``panel.delete`` job would work on are removed right after, so the
+    ``DELETE /users/{id}`` is made here and now, outside any transaction. ``False``: the user was already
+    gone (that is success too); a failure is raised as :class:`~svbg.remnawave.errors.RemnawaveError`."""
+    return await api.delete_user(int(panel_user_id), lane=Lane.INTERACTIVE)

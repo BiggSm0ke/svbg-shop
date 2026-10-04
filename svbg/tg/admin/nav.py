@@ -84,6 +84,7 @@ TITLES: Final[Mapping[str, str]] = MappingProxyType(
         "au.new": "🆕 Новые",
         "au.paid": "💳 Недавно оплатили",
         "au.ban": "⛔ Заблокированные",
+        "au.all": "📋 Все пользователи",
     }
 )
 
@@ -102,6 +103,7 @@ PARENT: Final[Mapping[str, str]] = MappingProxyType(
         "au.new": HUB_USERS,
         "au.paid": HUB_USERS,
         "au.ban": HUB_USERS,
+        "au.all": HUB_USERS,
         "apay": HUB_PAY,
         "apay.rc": HUB_PAY,
         "apay.c": "apay",
@@ -174,6 +176,15 @@ def has_screen(router: Any, code: str) -> bool:
         return bool(probe(code))
     screens = getattr(router, "_screens", None)
     return isinstance(screens, Mapping) and code in screens
+
+
+def can_open(router: Any, user: Any, code: str) -> bool:
+    """``user`` passes the guard of the registered screen ``code`` (True when it is not a code screen): a
+    button is hidden instead of answering «Нет прав»."""
+    screens = getattr(router, "_screens", None)
+    route = screens.get(code) if isinstance(screens, Mapping) else None
+    access = getattr(route, "access", None)
+    return access is None or bool(access.allows(user))
 
 
 def has_route(router: Any, screen: str, action: str = codec.ACTION_OPEN) -> bool:

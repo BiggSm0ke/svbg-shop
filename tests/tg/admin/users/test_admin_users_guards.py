@@ -18,7 +18,7 @@ from svbg.services import roles
 from svbg.services.roles import ADMIN_PERMS, RoleError
 from svbg.tg.admin import deeplinks
 from svbg.tg.admin.roles import ACTIONS as ROLE_ACTIONS
-from svbg.tg.admin.roles import MODULE_BIT0, SCREEN_EDIT, catalogue, mask_of
+from svbg.tg.admin.roles import MODULE_BIT0, catalogue, mask_of
 from svbg.tg.admin.users.screens import SCREEN_CARD
 from svbg.tg.ui.codec import encode
 from svbg.tg.ui.context import UserCtx
@@ -214,11 +214,7 @@ def test_editor_catalogue_bits() -> None:
 async def test_owner_grants_deeplinks_and_ip_guard_unblock_and_the_screens_open(db: CountingDatabase) -> None:
     env = await build_uenv(db, module_perms=MODULES)
     uid = env.ids[USER]
-    await env.click(OWNER, encode(SCREEN_EDIT, arg=str(uid)))
-    await env.press(OWNER, "админ")
-    assert "🧩 IP Guard: снять блок" in " ".join(env.labels())
-    assert "▫️ 🧩 IP Guard: снять блок" in env.labels()  # modules are never on by default
-    items = catalogue(MODULES)
+    items = catalogue(MODULES)  # an old «роль» button (a classic admin with a module right) still saves
     mask = mask_of(["deeplinks", "ip_guard.unblock"], items)
     await env.click(OWNER, encode(ROLE_ACTIONS, "save", f"{uid}:admin:{mask}"))
     assert "✅ Сохранено." in env.text

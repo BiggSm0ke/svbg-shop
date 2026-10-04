@@ -2,8 +2,13 @@
 
 Three roles: **Owner** (``OWNER_IDS`` or ``users.role='owner'``), **Admin** (``users.role='admin'`` plus a
 set of rights in ``users.perms``; ``*`` = every Admin right), **Support**. Rights above a role are never
-granted: only an owner assigns roles, and an admin's ``perms`` can only contain the Admin column of the
-matrix.
+granted: only an owner assigns classic roles, and an admin's ``perms`` can only contain the Admin column of
+the matrix.
+
+Custom roles (:mod:`svbg.services.staff_roles`): a member has ``users.staff_role_id`` and exactly the role's
+rights (copied into ``users.perms``, ``users.role`` is the rank the rights need). Such an :class:`Actor` is
+``scoped``: nothing comes by rank. Staff without a custom role keep the Support column by rank
+(:func:`svbg.core.perms.implicit`).
 
 * :func:`load_actor` re-reads the presser's role from the database **inside the caller's transaction** (money
   actions lock the row ``FOR SHARE``: a role revoked a millisecond earlier wins). The screen router checks the
@@ -32,6 +37,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import sqlalchemy as sa
 
+from svbg.core.perms import ADMIN_PERMS, ALL_PERMS, CORE_PERMS, ROLES_MANAGE, SUPPORT_PERMS, implicit
 from svbg.core.tables import admin_audit, users
 
 if TYPE_CHECKING:
@@ -41,6 +47,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ADMIN_PERMS",
+    "CORE_PERMS",
     "DAY_FACTOR",
     "DEFAULT_GRANT_DAYS_MAX",
     "KEY_GRANT_DAYS_DAY_MAX",
@@ -52,6 +59,7 @@ __all__ = [
     "ROLES",
     "ROLE_LABELS",
     "STAFF_ROLES",
+    "SUPPORT_PERMS",
     "Act",
     "Actor",
     "Limits",
@@ -59,6 +67,7 @@ __all__ = [
     "RoleError",
     "Rule",
     "StaffMember",
+    "actor_of",
     "audit",
     "authorize",
     "check_daily",
@@ -77,25 +86,7 @@ ROLES: Final[tuple[str, ...]] = ("user", "support", "admin", "owner")
 STAFF_ROLES: Final[tuple[str, ...]] = ("support", "admin", "owner")
 _RANK: Final[Mapping[str, int]] = {r: i for i, r in enumerate(ROLES)}
 
-#: The Admin column of 04 §9.1 (order = bit order of the role editor's checkboxes; append only).
-ADMIN_PERMS: Final[tuple[str, ...]] = (
-    "settings.business",
-    "plans",
-    "promo",
-    "payments.confirm",
-    "wallet.adjust",
-    "subs.grant",
-    "payments.refund",
-    "broadcast",
-    "users.ban",
-    "stats",
-    "system.view",
-    "content.edit",
-    "deeplinks",
-    "tickets",
-    "broadcast.send",
-)
-ALL_PERMS: Final = "*"
+#: ``ADMIN_PERMS`` (the Admin column), ``SUPPORT_PERMS`` and ``CORE_PERMS`` live in :mod:`svbg.core.perms`.
 
 ROLE_LABELS: Final[Mapping[str, str]] = {
     "user": "пользователь",
@@ -119,6 +110,10 @@ PERM_LABELS: Final[Mapping[str, str]] = {
     "deeplinks": "Конструктор ссылок",
     "tickets": "Обращения",
     "broadcast.send": "Отправлять рассылки",
+    "users.delete": "Удалять пользователей полностью",
+    "users.view": "Искать клиентов и смотреть карточки",
+    "users.help": "Сбрасывать устройства, менять ссылку, писать клиенту",
+    "roles.manage": "Команда и роли",
 }
 _MODULE_PERM_RE: Final = re.compile(r"^[a-z][a-z0-9_]{0,31}\.[a-z][a-z0-9_.]{0,31}$")
 
@@ -150,6 +145,7 @@ class Act(enum.StrEnum):
     STATS = "stats"
     SYSTEM_VIEW = "system.view"
     ROLES_MANAGE = "roles.manage"
+    USERS_DELETE = "users.delete"  # delete a user and everything tied to them
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,17 +157,19 @@ class Rule:
 
 #: 04 §9.1 rows this module enforces.
 MATRIX: Final[Mapping[Act, Rule]] = {
-    Act.USERS_VIEW: Rule("support"),
-    Act.USERS_DEVICES: Rule("support"),
-    Act.USERS_REISSUE: Rule("support"),
-    Act.USERS_MESSAGE: Rule("support"),
-    Act.TICKETS: Rule("support"),  # «ответы в поддержке»: Support and above
+    # The Support column: every staff member without a custom role has it by rank (svbg.core.perms.implicit).
+    Act.USERS_VIEW: Rule("support", "users.view"),
+    Act.USERS_DEVICES: Rule("support", "users.help"),
+    Act.USERS_REISSUE: Rule("support", "users.help"),
+    Act.USERS_MESSAGE: Rule("support", "users.help"),
+    Act.TICKETS: Rule("support", "tickets"),  # «ответы в поддержке»: Support and above
     Act.WALLET_ADJUST: Rule("admin", "wallet.adjust"),
     Act.SUBS_GRANT: Rule("admin", "subs.grant"),
     Act.USERS_BAN: Rule("admin", "users.ban"),
     Act.STATS: Rule("admin", "stats"),
     Act.SYSTEM_VIEW: Rule("admin", "system.view"),
-    Act.ROLES_MANAGE: Rule("owner", owner_only=True),
+    Act.ROLES_MANAGE: Rule("support", ROLES_MANAGE),  # never part of ``*``: a custom role or the owner
+    Act.USERS_DELETE: Rule("admin", "users.delete"),
 }
 
 #: Actions that move money or paid time: a reason is mandatory and ``amount_minor`` goes to the audit.
@@ -199,6 +197,8 @@ class Actor:
     role: str
     perms: frozenset[str] = frozenset()
     banned: bool = False
+    #: A member of a custom role (``users.staff_role_id``): exactly the role's rights, nothing by rank.
+    scoped: bool = False
 
     @property
     def is_owner(self) -> bool:
@@ -208,6 +208,14 @@ class Actor:
         if self.banned:
             return False
         if self.role == "owner":
+            return True
+        if self.role not in ("admin", "support"):
+            return False
+        if self.scoped:
+            return perm in self.perms
+        if perm == ROLES_MANAGE:  # «Команда и роли» comes only with a custom role
+            return False
+        if implicit(perm):  # the Support column and module views: every classic staff member
             return True
         if self.role != "admin":
             return False
@@ -254,9 +262,9 @@ async def load_actor(
     if (telegram_id is None) == (user_id is None):
         raise ValueError("pass exactly one of telegram_id / user_id")
     cond = users.c.telegram_id == telegram_id if telegram_id is not None else users.c.id == user_id
-    stmt = sa.select(users.c.id, users.c.telegram_id, users.c.role, users.c.perms, users.c.banned_at).where(
-        cond
-    )
+    stmt = sa.select(
+        users.c.id, users.c.telegram_id, users.c.role, users.c.perms, users.c.banned_at, users.c.staff_role_id
+    ).where(cond)
     if lock:
         stmt = stmt.with_for_update(read=True)
     row = (await conn.execute(stmt)).first()
@@ -269,12 +277,26 @@ async def load_actor(
     role = str(row.role) if row.role in _RANK else "user"
     if tg is not None and tg in owners:
         role = "owner"
+    scoped = row.staff_role_id is not None and role != "owner"
     return Actor(
         int(row.id),
         int(tg) if tg is not None else None,
         role,
-        _perms(row.perms) if role == "admin" else frozenset(),
+        _perms(row.perms) if role == "admin" or (scoped and role == "support") else frozenset(),
         banned=row.banned_at is not None and tg not in owners,
+        scoped=scoped,
+    )
+
+
+def actor_of(user: Any) -> Actor:
+    """An :class:`Actor` from a cached :class:`~svbg.tg.ui.context.UserCtx` (visibility only: services
+    re-read the role with :func:`load_actor`)."""
+    return Actor(
+        getattr(user, "user_id", None),
+        getattr(user, "telegram_id", None),
+        str(getattr(user, "role", "user")),
+        frozenset(getattr(user, "perms", frozenset()) or ()),
+        scoped=getattr(user, "staff_role", None) is not None,
     )
 
 
@@ -440,7 +462,7 @@ async def audit(
 
 def is_module_perm(perm: Any) -> bool:
     """An X13 module right ``<module>.<action>`` (not a core one)."""
-    return isinstance(perm, str) and perm not in ADMIN_PERMS and _MODULE_PERM_RE.match(perm) is not None
+    return isinstance(perm, str) and perm not in CORE_PERMS and _MODULE_PERM_RE.match(perm) is not None
 
 
 def _module_catalogue(module_perms: Iterable[str]) -> list[str]:
@@ -466,10 +488,10 @@ def clean_perms(role: str, perms: Iterable[str], module_perms: Iterable[str] = (
 
 
 def stored_perms(raw: Any) -> tuple[str, ...]:
-    """Rights as stored in ``users.perms``: core in matrix order (``*`` → the whole core column), then the
-    module rights in sorted order. Junk is dropped."""
+    """Rights as stored in ``users.perms`` / ``staff_roles.perms``: core in editor order (``*`` → the whole
+    Admin column), then the module rights in sorted order. Junk is dropped."""
     perms = _perms(raw)
-    core = ADMIN_PERMS if ALL_PERMS in perms else tuple(p for p in ADMIN_PERMS if p in perms)
+    core = tuple(p for p in CORE_PERMS if p in perms or (ALL_PERMS in perms and p in ADMIN_PERMS))
     return core + tuple(sorted(p for p in perms if is_module_perm(p)))
 
 
@@ -497,18 +519,25 @@ async def set_role(
     owner_ids: Iterable[int] = (),
     module_perms: Iterable[str] = (),
 ) -> RoleChange:
-    """Grant / change / revoke (``role='user'``) a role. Owner only; never one's own role; ``OWNER_IDS``
-    members are owners by configuration and are changed only there. Audited (``role.set``) in this
-    transaction. ``module_perms`` — the X13 catalogue of active modules. The caller drops the target's cached
-    context afterwards."""
-    if actor is None or not authorize(actor, Act.ROLES_MANAGE):
+    """Grant / change / revoke (``role='user'``) a classic role (the target leaves any custom role). Owner
+    only; never one's own role; ``OWNER_IDS`` members are owners by configuration and are changed only there.
+    Audited (``role.set``) in this transaction. ``module_perms`` — the X13 catalogue of active modules. The
+    caller drops the target's cached context afterwards. Custom roles: :mod:`svbg.services.staff_roles`."""
+    if actor is None or not actor.is_owner:
         raise RoleError("denied", DENIED)
     if role not in _RANK:
         raise RoleError("role", "Неизвестная роль.")
     new_perms = tuple(clean_perms(role, perms, module_perms))
     row = (
         await conn.execute(
-            sa.select(users.c.id, users.c.telegram_id, users.c.role, users.c.perms, users.c.banned_at)
+            sa.select(
+                users.c.id,
+                users.c.telegram_id,
+                users.c.role,
+                users.c.perms,
+                users.c.banned_at,
+                users.c.staff_role_id,
+            )
             .where(users.c.id == target_user_id)
             .with_for_update()
         )
@@ -531,10 +560,12 @@ async def set_role(
         old_perms,
         new_perms,
     )
-    if not change.changed:
+    if not change.changed and row.staff_role_id is None:
         return change
     await conn.execute(
-        sa.update(users).where(users.c.id == target_user_id).values(role=role, perms=list(new_perms))
+        sa.update(users)
+        .where(users.c.id == target_user_id)
+        .values(role=role, perms=list(new_perms), staff_role_id=None)
     )
     await audit(
         conn,
@@ -560,10 +591,15 @@ class StaffMember:
     role: str
     perms: tuple[str, ...]
     banned_at: datetime | None
+    staff_role_id: int | None = None
+
+    @property
+    def scoped(self) -> bool:
+        return self.staff_role_id is not None and self.role != "owner"
 
 
 async def staff_list(conn: AsyncConnection, *, limit: int = 100) -> list[StaffMember]:
-    """Everyone with a stored staff role (partial index ``ix_users_staff_role``), owners first."""
+    """Everyone with a stored staff role or a custom role (partial indexes), owners first."""
     rank = sa.case({"owner": 0, "admin": 1, "support": 2}, value=users.c.role, else_=3)
     rows = (
         await conn.execute(
@@ -575,8 +611,9 @@ async def staff_list(conn: AsyncConnection, *, limit: int = 100) -> list[StaffMe
                 users.c.role,
                 users.c.perms,
                 users.c.banned_at,
+                users.c.staff_role_id,
             )
-            .where(users.c.role != "user")
+            .where(sa.or_(users.c.role != "user", users.c.staff_role_id.is_not(None)))
             .order_by(rank, users.c.id)
             .limit(limit)
         )
@@ -590,6 +627,7 @@ async def staff_list(conn: AsyncConnection, *, limit: int = 100) -> list[StaffMe
             str(r.role),
             stored_perms(r.perms),
             r.banned_at,
+            int(r.staff_role_id) if r.staff_role_id is not None else None,
         )
         for r in rows
     ]

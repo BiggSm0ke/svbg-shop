@@ -172,6 +172,7 @@ class UserDirectory:
             users.c.language,
             users.c.banned_at,
             users.c.captcha_passed_at,
+            users.c.staff_role_id,
             sa.literal_column("(xmax = 0)").label("inserted"),
         )
         async with self._db.tx() as conn:
@@ -194,6 +195,7 @@ class UserDirectory:
             is_new=bool(row["inserted"]),
             currency=str(self._setting("CURRENCY", "RUB")),
             captcha_passed=row["captcha_passed_at"] is not None,
+            staff_role=None if row["staff_role_id"] is None or role == "owner" else int(row["staff_role_id"]),
         )
 
     def _touch(self, telegram_id: int) -> None:

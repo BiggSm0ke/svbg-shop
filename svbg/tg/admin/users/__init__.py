@@ -3,13 +3,15 @@
 * :mod:`.search` — the search query (``pg_trgm``), :mod:`.queries` — the read side of the card and histories,
 * :mod:`.ops` — the operations (through services and the panel writer; role re-check, limits, reason and
   ``admin_audit`` in one transaction),
-* :mod:`.screens` — screens, forms, ``/user`` and the admin-group «👤 Карточка» button.
+* :mod:`.screens` — screens, forms, ``/user`` and the admin-group «👤 Карточка» button, the full list and
+  «🗑 Удалить полностью» (:mod:`svbg.services.user_delete`).
 
 :func:`setup` is the module entry point for ``svbg.app`` (``setup(router, deps)``).
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, tzinfo
@@ -18,8 +20,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Router
 
+from svbg.core.bus import Event
 from svbg.core.money import exponent
 from svbg.services.roles import Limits
+from svbg.services.user_delete import UserDeleter
 from svbg.tg.admin.users.ops import UserOps
 from svbg.tg.admin.users.screens import SCREEN_CARD, SCREEN_FIND, UserScreens, card_button
 
@@ -101,6 +105,29 @@ def build(router: Any, deps: Any) -> UserScreens:
     def plans() -> Any:
         return None if catalog is None else catalog.snapshot
 
+    def forget(user_id: int, telegram_id: int | None) -> None:
+        """A deleted user: drop the cached context, the screen state and the captcha challenge."""
+        invalidate(telegram_id)
+        state = getattr(router, "ui_state", None)
+        if state is not None:
+            state.forget(user_id)
+        captcha = getattr(getattr(router, "gate", None), "__self__", None)  # svbg.tg.user.captcha
+        drop = getattr(captcha, "forget", None)
+        if callable(drop):
+            drop(user_id)
+        bus = getattr(deps, "bus", None)
+        if bus is not None:
+            with contextlib.suppress(RuntimeError):  # the bus is closed (shutdown)
+                bus.publish_nowait(Event("user.deleted", {"user_id": user_id, "telegram_id": telegram_id}))
+
+    def panel() -> Any:
+        rw = getattr(deps, "remnawave", None)
+        if rw is None:
+            from svbg.remnawave.errors import PanelNotConfiguredError
+
+            raise PanelNotConfiguredError()
+        return rw.client
+
     def format_date(value: datetime | None) -> str:
         if value is None:
             return "—"
@@ -127,6 +154,14 @@ def build(router: Any, deps: Any) -> UserScreens:
         owner_ids=owner_ids,
         invalidate=invalidate,
         plans=plans,
+        deleter=UserDeleter(
+            deps.db,
+            owner_ids=owner_ids,
+            panel=panel,
+            forget=forget,
+            admin_chat=lambda: getattr(deps, "admin_chat", None),
+            writes_stopped=getattr(deps, "writes_stopped", None),  # the shadow probe stopped panel writes
+        ),
     )
     screens.install()
     return screens

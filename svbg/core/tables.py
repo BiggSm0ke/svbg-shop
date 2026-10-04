@@ -16,6 +16,7 @@ __all__ = [
     "admin_audit",
     "attention_items",
     "config_meta",
+    "staff_roles",
     "user_identities",
     "users",
 ]
@@ -61,11 +62,36 @@ users = sa.Table(
     # Entry captcha (``svbg.tg.user.captcha``): when the user tapped the right emoji; NULL — not passed yet.
     # Users who were there before the captcha (migration 0006) and imported users are marked passed.
     sa.Column("captcha_passed_at", UtcDateTime, nullable=True),
+    # Custom staff role (``svbg.services.staff_roles``, migration 0007): the member has exactly its rights,
+    # copied into ``perms``; ``role`` is the rank they need. NULL — a plain user, an owner or classic staff.
+    sa.Column(
+        "staff_role_id",
+        sa.BigInteger,
+        sa.ForeignKey("staff_roles.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
     sa.CheckConstraint(_in("role", USER_ROLES), name="role"),
     sa.CheckConstraint("wallet_minor >= 0", name="wallet_minor"),
     sa.CheckConstraint("jsonb_typeof(perms) = 'array'", name="perms_array"),
     # Staff list (support/admin/owner) is tiny; a partial index keeps role checks cheap.
     sa.Index("ix_users_staff_role", "role", postgresql_where=sa.text("role <> 'user'")),
+    sa.Index(
+        "ix_users_staff_role_id", "staff_role_id", postgresql_where=sa.text("staff_role_id IS NOT NULL")
+    ),
+)
+
+#: Custom staff roles: a name and a set of rights (``svbg.services.staff_roles``). Members point here with
+#: ``users.staff_role_id``; deleting a role leaves its members without one.
+staff_roles = sa.Table(
+    "staff_roles",
+    metadata,
+    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
+    sa.Column("name", sa.Text, nullable=False, unique=True),
+    sa.Column("perms", JSONB, nullable=False, server_default=sa.text("'[]'::jsonb")),
+    sa.Column("created_at", UtcDateTime, nullable=False, server_default=now_default()),
+    sa.Column("updated_at", UtcDateTime, nullable=False, server_default=now_default()),
+    sa.CheckConstraint("length(btrim(name)) BETWEEN 1 AND 40", name="name"),
+    sa.CheckConstraint("jsonb_typeof(perms) = 'array'", name="perms_array"),
 )
 
 user_identities = sa.Table(

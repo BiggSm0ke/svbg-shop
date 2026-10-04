@@ -215,6 +215,10 @@ class CaptchaScreens:
 
     # ------------------------------------------------------------------ challenges
 
+    def forget(self, user_id: int) -> None:
+        """Drop the challenge of a user who was deleted (``svbg.services.user_delete``)."""
+        self._challenges.pop(user_id, None)
+
     def current(self, user_id: int) -> Challenge | None:
         """The challenge the user sees now (``None`` before the first one or after passing)."""
         return self._challenges.get(user_id)

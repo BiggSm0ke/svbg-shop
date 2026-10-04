@@ -5,6 +5,11 @@ Screens (code-defined, on the :class:`~svbg.tg.ui.router.ScreenRouter`):
 * ``au.find`` — asks for a query (form ``au.f.find``); ``au.q`` — results for a query (one hit → the card);
   :meth:`UserScreens.search_view` serves the admin root, where a typed ID or a forwarded message is a query;
 * ``au.new`` (newest users), ``au.paid`` (latest payments), ``au.ban`` (banned users): 20 rows, one SQL each;
+* ``au.all`` — «📋 Все пользователи»: everybody, 10 per page, newest first (keyset), with filters (all,
+  active, trial, expired, no subscription, banned, no captcha); one SQL per page plus the per-filter totals
+  cached for a minute. A row opens the card, whose back button returns to the same page and filter;
+* ``au.del`` — «🗑 Удалить полностью» (``users.delete``): what goes away, the «Удалить и в панели» toggle, then
+  :class:`svbg.services.user_delete.UserDeleter` (panel first; on a panel failure «Удалить только в боте»);
 * ``au.days`` — «➕ Дни» with ready values (+1 … +90, −1, −7) or «✏️ Своё», then the reason;
 * ``au`` — the card: who, role, status, balance (not for Support), subscription, money counters; buttons by
   the viewer's rights: ``±дни``, «Выдать тариф», «Баланс», «Устройства», «Новая ссылка», «Написать»,
@@ -61,6 +66,7 @@ from svbg.tg.ui.view import Redirect, Toast, View
 
 if TYPE_CHECKING:
     from svbg.db.engine import Database
+    from svbg.services.user_delete import Preview, UserDeleter
     from svbg.tg.ui.context import UserCtx
     from svbg.tg.ui.router import HandlerResult, ScreenCtx, ScreenRouter
 
@@ -69,9 +75,11 @@ __all__ = [
     "ADMIN_HOME",
     "GROUP_PREFIX",
     "ROLE_SCREEN",
+    "SCREEN_ALL",
     "SCREEN_BANNED",
     "SCREEN_CARD",
     "SCREEN_DAYS",
+    "SCREEN_DELETE",
     "SCREEN_FIND",
     "SCREEN_NEW",
     "SCREEN_PAID",
@@ -99,6 +107,8 @@ SCREEN_DAYS: Final = "au.days"
 SCREEN_NEW: Final = "au.new"
 SCREEN_PAID: Final = "au.paid"
 SCREEN_BANNED: Final = "au.ban"
+SCREEN_ALL: Final = "au.all"
+SCREEN_DELETE: Final = "au.del"
 ACTIONS: Final = "aua"
 GROUP_PREFIX: Final = "auc"
 
@@ -112,12 +122,25 @@ F_UNBAN: Final = "au.f.unban"
 F_MSG: Final = "au.f.msg"
 
 _ID_RE: Final = re.compile(r"^\d{1,18}$")
+_LIST_ARG_RE: Final = re.compile(r"^([a-z]{2,5}):(\d{1,6}):(?:([ab])(\d{1,18}))?$")
 _GROUP_RE: Final = re.compile(rf"^{GROUP_PREFIX}:(\d{{1,18}})$")
 _PAY_ID_RE: Final = re.compile(r"^[0-9a-f-]{36}$")
 _DENIED_AUDIT_S: Final = 60.0
 _LAST_CARD_MAX: Final = 1000
 DAY_PRESETS: Final[tuple[int, ...]] = (1, 3, 7, 30, 90, -1, -7)
 LIST_LIMIT: Final = 20
+COUNTS_TTL: Final = 60.0
+#: Filter → button label of «📋 Все пользователи» (rows of the filter keyboard below).
+DIR_LABELS: Final[Mapping[str, str]] = {
+    "all": "Все",
+    "act": "Активные",
+    "trial": "Пробные",
+    "exp": "Истекли",
+    "nosub": "Без подписки",
+    "ban": "Заблокированы",
+    "nocap": "Без капчи",
+}
+_DIR_ROWS: Final[tuple[tuple[str, ...], ...]] = (("all", "act", "trial"), ("exp", "nosub"), ("ban", "nocap"))
 
 _INSTALLED: weakref.WeakKeyDictionary[Any, UserScreens] = weakref.WeakKeyDictionary()
 
@@ -215,6 +238,52 @@ _T: Final[dict[str, str]] = {
     "fail": "⚠️ {text}",
     "group_opened": "Карточка открыта в личке с ботом",
     "group_no_dm": "Напишите боту в личку /start — тогда карточка откроется там",
+    # «📋 Все пользователи»
+    "all_title": "📋 Все пользователи",
+    "all_total": "Всего: {n}",
+    "all_shown": "{flt}: {n} из {total}",
+    "all_page": "Сначала новые. Страница {page}.",
+    "all_empty": "Здесь пока никого.",
+    "all_prev": "⬅️ Назад",
+    "to_list": "⬅️ К списку",
+    "st_banned": "🚫 блок",
+    "st_nosub": "без подписки",
+    "st_pending": "⏳ подключается",
+    "st_closed": "закрыта",
+    "st_hold": "⏸ пауза",
+    "st_trial": "🎁 пробная",
+    "st_active": "🟢 активна",
+    "st_expired": "⛔️ истекла",
+    # «🗑 Удалить полностью»
+    "b_delete": "🗑 Удалить полностью",
+    "del_title": "🗑 <b>Удалить полностью?</b>\n{who}",
+    "del_what": "Что пропадёт:",
+    "del_subs": "• подписки: {n}",
+    "del_subs_panel": "• подписки: {n} (в панели: {p})",
+    "del_wallet": "• баланс: {balance}",
+    "del_money": "• оплаты: {payments}, заказы: {orders}",
+    "del_ref": "• рефералка: {text}",
+    "del_ref_invited": "пригласил(а) {n}",
+    "del_ref_by": "пришёл(а) по чужой ссылке",
+    "del_tickets": "• обращения в поддержку: {n}",
+    "del_promo": "• промокоды: {n}",
+    "none": "нет",
+    "del_panel_on": "В панели Remnawave его тоже удалим.",
+    "del_panel_off": "В панели пользователь останется.",
+    "del_after": "Бот забудет этого человека. Если он снова нажмёт /start, начнёт как новый: капча, пробный "
+    "период. Вернуть данные нельзя.",
+    "del_refused": "🗑 Этого пользователя удалить нельзя: {text}",
+    "b_panel_on": "✅ Удалить и в панели",
+    "b_panel_off": "⬜️ Удалить и в панели",
+    "b_del_yes": "Да, удалить навсегда",
+    "b_del_no": "Отмена",
+    "b_bot_only": "Удалить только в боте",
+    "b_retry": "🔄 Попробовать снова",
+    "del_failed": "⚠️ {text}\n\nВ боте пока ничего не удалено.",
+    "del_done": "✅ <b>Пользователь удалён</b>\n{who}\n\n{panel}\nЕсли он снова напишет боту, начнёт с нуля.",
+    "del_done_panel": "В панели тоже удалён.",
+    "del_done_kept": "В панели остался.",
+    "del_done_none": "В панели его не было.",
 }
 
 PAY_STATUS: Final[Mapping[str, str]] = {
@@ -300,7 +369,7 @@ def _esc(value: Any) -> str:
 
 
 def _actor_of(user: UserCtx) -> Actor:
-    return Actor(user.user_id, user.telegram_id, user.role, user.perms)
+    return roles.actor_of(user)
 
 
 def _can(user: UserCtx, act: Act) -> bool:
@@ -342,6 +411,17 @@ def _reason(value: str) -> str:
         raise ValidationError(e.text) from None
 
 
+def _list_arg(arg: Any) -> tuple[str, int, int | None, int | None] | None:
+    """``<filter>:<page>:[b<id>|a<id>]`` → ``(filter, page, before, after)``; ``None`` for anything else."""
+    if arg is None or arg == "":
+        return "all", 1, None, None
+    match = _LIST_ARG_RE.match(arg) if isinstance(arg, str) else None
+    if match is None or match[1] not in queries.DIR_FILTERS or int(match[2]) < 1:
+        return None
+    cursor = int(match[4]) if match[4] else None
+    return match[1], int(match[2]), cursor if match[3] == "b" else None, cursor if match[3] == "a" else None
+
+
 def _query_validator(value: str) -> str:
     try:
         parse_query(value)
@@ -365,6 +445,7 @@ class UserScreens:
         invalidate: Callable[[int | None], None] | None = None,
         plans: Callable[[], Any] = lambda: None,
         lang: str = "ru",
+        deleter: UserDeleter | None = None,
     ) -> None:
         self.router = router
         self.db = db
@@ -375,7 +456,12 @@ class UserScreens:
         self.invalidate = invalidate
         self.plans = plans
         self.lang = lang
+        #: «🗑 Удалить полностью» (``None``: the button is not shown).
+        self.deleter = deleter
         self._last_card: dict[int, int] = {}  # viewer user id → last card shown (form «Отмена» returns there)
+        #: viewer user id → (card user id, page of «📋 Все пользователи» it was opened from)
+        self._origin: dict[int, tuple[int, str]] = {}
+        self._counts: tuple[float, dict[str, int]] | None = None
         self._denied_at: dict[int, float] = {}
         self._installed = False
 
@@ -386,12 +472,13 @@ class UserScreens:
             return
         self._installed = True
         r = self.router
-        staff: dict[str, Any] = {"required_role": "support"}
+        staff: dict[str, Any] = {"required_role": "support", "perm": "users.view"}  # custom roles: explicit
         admin: dict[str, Any] = {"required_role": "admin"}
         grant: dict[str, Any] = {"required_role": "admin", "perm": "subs.grant"}
         money: dict[str, Any] = {"required_role": "admin", "perm": "wallet.adjust"}
         ban: dict[str, Any] = {"required_role": "admin", "perm": "users.ban"}
         stats: dict[str, Any] = {"required_role": "admin", "perm": "stats"}
+        delete: dict[str, Any] = {"required_role": "admin", "perm": "users.delete"}
         _INSTALLED[r] = self
         screens: Sequence[tuple[str, Callable[[ScreenCtx, Any], Awaitable[Any]], dict[str, Any]]] = (
             (SCREEN_FIND, self._find_screen, staff),
@@ -407,6 +494,8 @@ class UserScreens:
             (SCREEN_NEW, self._new_screen, staff),
             (SCREEN_PAID, self._paid_screen, stats),
             (SCREEN_BANNED, self._banned_screen, ban),
+            (SCREEN_ALL, self._all_screen, staff),
+            (SCREEN_DELETE, self._delete_screen, delete),
         )
         for code, fn, guard in screens:
             r.screen(code, **guard)(fn)
@@ -420,6 +509,7 @@ class UserScreens:
             ("msg", self._a_message, staff),
             ("rd", self._a_reset_devices, staff),
             ("ri", self._a_reissue, staff),
+            ("del", self._a_delete, delete),
         )
         for name, fn, guard in actions:
             r.action(ACTIONS, name, **guard)(fn)
@@ -589,9 +679,23 @@ class UserScreens:
             self._last_card.clear()
         self._last_card[ctx.user.user_id] = uid
 
+    def _set_origin(self, ctx: ScreenCtx, uid: int, page: str) -> None:
+        if len(self._origin) > _LAST_CARD_MAX:
+            self._origin.clear()
+        self._origin[ctx.user.user_id] = (uid, page)
+
+    def _drop_origin(self, ctx: ScreenCtx) -> None:
+        self._origin.pop(ctx.user.user_id, None)
+
+    def _list_page_of(self, viewer: UserCtx, uid: int) -> str | None:
+        """The page of the full list the card of ``uid`` was opened from (``None``: opened from elsewhere)."""
+        origin = self._origin.get(viewer.user_id)
+        return origin[1] if origin is not None and origin[0] == uid else None
+
     # ------------------------------------------------------------ search
 
     async def _find_screen(self, ctx: ScreenCtx, _arg: Any) -> View:
+        self._drop_origin(ctx)
         return await ctx.start_form(F_FIND)
 
     async def _f_find(self, ctx: ScreenCtx, data: dict[str, Any]) -> HandlerResult:
@@ -611,6 +715,7 @@ class UserScreens:
     async def search_view(self, ctx: ScreenCtx, text: str) -> View | None:
         """The answer to a query: the card (one hit), the list (several), the reason a query is not
         searchable; ``None`` when nobody was found (one SQL)."""
+        self._drop_origin(ctx)
         try:
             q = parse_query(text)
         except QueryError as e:
@@ -648,9 +753,15 @@ class UserScreens:
     # ------------------------------------------------------------ card
 
     async def _card_screen(self, ctx: ScreenCtx, arg: Any) -> View | Redirect:
+        page: str | None = None
+        if isinstance(arg, str) and "|" in arg:  # opened from «📋 Все пользователи»: «<id>|<page>»
+            arg, _, tail = arg.partition("|")
+            page = tail if _list_arg(tail) is not None else None
         uid = _uid(arg)
         if uid is None:
             return Redirect(ADMIN_HOME, toast=_T["not_found"])
+        if page is not None:
+            self._set_origin(ctx, uid, page)
         return await self.card_view(ctx, uid)
 
     async def card_view(self, ctx: ScreenCtx, uid: int, *, note: str | None = None) -> View:
@@ -665,7 +776,39 @@ class UserScreens:
         text = self._card_text(ctx.user, card)
         if note:
             text = f"{note}\n\n{text}"
-        return View(text=text, parse_mode="HTML", keyboard=self._card_keyboard(ctx.user, card))
+        can_delete = await self._may_delete(
+            ctx.user, card.user_id, card.role, card.telegram_id, card.staff_role_id
+        )
+        return View(
+            text=text,
+            parse_mode="HTML",
+            keyboard=self._card_keyboard(ctx.user, card, can_delete=can_delete),
+        )
+
+    async def _owners(self) -> frozenset[int]:
+        if self.owner_ids is None:
+            return frozenset()
+        try:
+            return await self.owner_ids()
+        except Exception:
+            log.exception("owner ids are not available")
+            return frozenset()
+
+    async def _may_delete(
+        self,
+        viewer: UserCtx,
+        uid: int,
+        role: str,
+        telegram_id: int | None,
+        staff_role_id: int | None = None,
+    ) -> bool:
+        """«🗑 Удалить полностью» is shown for a plain user only, never for oneself, staff (a custom role too,
+        even without rights) or an owner (the service checks it all again)."""
+        if self.deleter is None or not _can(viewer, Act.USERS_DELETE):
+            return False
+        if role != "user" or staff_role_id is not None or uid == viewer.user_id:
+            return False
+        return telegram_id is None or telegram_id not in await self._owners()
 
     def _card_text(self, viewer: UserCtx, card: queries.Card) -> str:
         name = _esc((card.first_name or "").strip()[:64] or _T["no_name"])
@@ -748,7 +891,9 @@ class UserScreens:
             lines.append(_T["sub_link"].format(url=_esc(card.subscription_url[:200])))
         return lines
 
-    def _card_keyboard(self, viewer: UserCtx, card: queries.Card) -> list[list[InlineKeyboardButton]]:
+    def _card_keyboard(
+        self, viewer: UserCtx, card: queries.Card, *, can_delete: bool = False
+    ) -> list[list[InlineKeyboardButton]]:
         uid = str(card.user_id)
         rows: list[list[InlineKeyboardButton]] = []
         pair: list[InlineKeyboardButton] = []
@@ -794,13 +939,21 @@ class UserScreens:
                 nav_button(_T["b_events"], SCREEN_EVENTS, arg=uid),
             ]
         )
-        if viewer.role == "owner" and card.user_id != viewer.user_id:
+        if viewer.has_perm("roles.manage") and card.user_id != viewer.user_id:  # owner or a team manager
             rows.append([nav_button(_T["b_role"], ROLE_SCREEN, arg=uid)])
+        if can_delete:
+            rows.append([nav_button(_T["b_delete"], SCREEN_DELETE, arg=f"{uid}:1", style="danger")])
         if card.subscription_url and card.subscription_url.startswith(("https://", "http://")):
             link = card.subscription_url[:256]
             rows.append([InlineKeyboardButton(text=_T["b_copy_link"], copy_text=CopyTextButton(text=link))])
         rows.append([nav_button(_T["refresh"], SCREEN_CARD, arg=uid), nav_button(_T["again"], SCREEN_FIND)])
-        rows.append(self._back_row())
+        page = self._list_page_of(viewer, card.user_id)
+        if page is not None:
+            rows.append(
+                [nav_button(_T["to_list"], SCREEN_ALL, arg=page), nav_button(_T["admin_root"], ADMIN_HOME)]
+            )
+        else:
+            rows.append(self._back_row())
         return rows
 
     # ------------------------------------------------------------ histories
@@ -1024,12 +1177,14 @@ class UserScreens:
         return name + (f" @{username[:28]}" if username else "")
 
     async def _new_screen(self, ctx: ScreenCtx, _arg: Any) -> View:
+        self._drop_origin(ctx)
         async with self.db.read() as conn:
             found = await queries.recent_users(conn, limit=LIST_LIMIT)
         items = [(r.user_id, f"{self._person(r.first_name, r.username)} · {self._date(r.at)}") for r in found]
         return self._list_view(SCREEN_NEW, _T["new_hint"], items)
 
     async def _paid_screen(self, ctx: ScreenCtx, _arg: Any) -> View:
+        self._drop_origin(ctx)
         async with self.db.read() as conn:
             found = await queries.recent_payers(conn, limit=LIST_LIMIT)
         items = [
@@ -1043,6 +1198,7 @@ class UserScreens:
         return self._list_view(SCREEN_PAID, _T["paid_hint"], items)
 
     async def _banned_screen(self, ctx: ScreenCtx, _arg: Any) -> View:
+        self._drop_origin(ctx)
         async with self.db.read() as conn:
             found = await queries.banned_users(conn, limit=LIST_LIMIT)
         items = [
@@ -1052,6 +1208,196 @@ class UserScreens:
 
     def _short_dt(self, value: datetime | None) -> str:
         return "—" if value is None else value.astimezone(self._tz()).strftime("%d.%m %H:%M")
+
+    # ------------------------------------------------------------ «📋 Все пользователи»
+
+    async def _dir_counts(self) -> dict[str, int] | None:
+        """Per-filter totals, cached for :data:`COUNTS_TTL` seconds (one SQL when stale)."""
+        at = time.monotonic()
+        if self._counts is not None and at - self._counts[0] < COUNTS_TTL:
+            return self._counts[1]
+        try:
+            async with self.db.read() as conn:
+                counts = await queries.count_directory(conn)
+        except (sa.exc.SQLAlchemyError, OSError):
+            log.warning("user list totals are not available", exc_info=True)
+            return None
+        self._counts = (at, counts)
+        return counts
+
+    def _status(self, row: queries.DirRow) -> str:
+        if row.banned:
+            return _T["st_banned"]
+        if row.sub_id is None:
+            return _T["st_nosub"]
+        if row.link_state == "pending":
+            return _T["st_pending"]
+        if row.link_state not in queries.LIVE_STATES:
+            return _T["st_closed"]
+        if row.hold_kind is not None:
+            return _T["st_hold"]
+        at = now()
+        if row.paid_until is None or row.paid_until <= at:
+            return _T["st_expired"]
+        days = int((row.paid_until - at).total_seconds() // 86_400)
+        left = _T["days_left"].format(n=days) if days > 0 else _T["today"]
+        return f"{_T['st_trial' if row.is_trial else 'st_active']} · {left}"
+
+    def _dir_label(self, row: queries.DirRow) -> str:
+        name = (row.first_name or "").strip()[:24]
+        if not name:
+            name = f"@{row.username[:24]}" if row.username else f"№{row.user_id}"
+        return f"{name} · {self._status(row)}"[:64]
+
+    async def _all_screen(self, ctx: ScreenCtx, arg: Any) -> View:
+        parsed = _list_arg(arg) or ("all", 1, None, None)
+        flt, page_no, before, after = parsed
+        async with self.db.read() as conn:
+            found = await queries.list_directory(conn, flt, before=before, after=after)
+        if after is not None:
+            page, more = found, True  # we came back from the next page
+        else:
+            page, more = found[: queries.DIR_PAGE], len(found) > queries.DIR_PAGE
+        counts = await self._dir_counts()
+        here = f"{flt}:{page_no}:" + (f"b{before}" if before else f"a{after}" if after else "")
+        self._drop_origin(ctx)
+        crumb = f"🛠 Админка › 👥 Пользователи › <b>{_T['all_title']}</b>"
+        lines = [crumb, ""]
+        if counts is not None:
+            total = counts.get("all", 0)
+            lines.append(
+                _T["all_total"].format(n=total)
+                if flt == "all"
+                else _T["all_shown"].format(flt=DIR_LABELS[flt], n=counts.get(flt, 0), total=total)
+            )
+        lines.append(_T["all_page"].format(page=page_no) if page else _T["all_empty"])
+        rows = [[nav_button(self._dir_label(r), SCREEN_CARD, arg=f"{r.user_id}|{here}")] for r in page]
+        pager: list[InlineKeyboardButton] = []
+        if page_no > 1 and page:
+            back = f"{flt}:1:" if page_no == 2 else f"{flt}:{page_no - 1}:a{page[0].user_id}"
+            pager.append(nav_button(_T["all_prev"], SCREEN_ALL, arg=back))
+        if more and page:
+            pager.append(nav_button(_T["more"], SCREEN_ALL, arg=f"{flt}:{page_no + 1}:b{page[-1].user_id}"))
+        if pager:
+            rows.append(pager)
+        for group in _DIR_ROWS:
+            rows.append(
+                [
+                    nav_button(("✅ " if f == flt else "") + DIR_LABELS[f], SCREEN_ALL, arg=f"{f}:1:")
+                    for f in group
+                ]
+            )
+        rows.append([nav_button(_T["b_find"], SCREEN_FIND)])
+        rows.append(self._back_row())
+        return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
+
+    # ------------------------------------------------------------ «🗑 Удалить полностью»
+
+    def _back_after_delete(self, viewer: UserCtx, uid: int) -> list[list[InlineKeyboardButton]]:
+        page = self._list_page_of(viewer, uid)
+        rows: list[list[InlineKeyboardButton]] = []
+        if page is not None:
+            rows.append([nav_button(_T["to_list"], SCREEN_ALL, arg=page)])
+        rows.append([nav_button(_T["b_find"], SCREEN_FIND)])
+        rows.append(self._back_row())
+        return rows
+
+    def _delete_text(self, pv: Preview, panel: bool) -> str:
+        who = _esc(self._person(pv.first_name, pv.username))
+        if pv.telegram_id is not None:
+            who += f" · ID <code>{pv.telegram_id}</code>"
+        none = _T["none"]
+        ref = [_T["del_ref_invited"].format(n=pv.invited)] if pv.invited else []
+        if pv.invited_by:
+            ref.append(_T["del_ref_by"])
+        subs = (
+            _T["del_subs_panel"].format(n=pv.subscriptions, p=pv.panel_users)
+            if pv.panel_users
+            else _T["del_subs"].format(n=pv.subscriptions or none)
+        )
+        lines = [
+            _T["del_title"].format(who=who),
+            "",
+            _T["del_what"],
+            subs,
+            _T["del_wallet"].format(
+                balance=_esc(self._fmt_money(pv.wallet_minor)) if pv.wallet_minor else none
+            ),
+            _T["del_money"].format(payments=pv.payments or none, orders=pv.orders or none),
+            _T["del_ref"].format(text=", ".join(ref) if ref else none),
+            _T["del_tickets"].format(n=pv.tickets or none),
+            _T["del_promo"].format(n=pv.promo_uses or none),
+            "",
+        ]
+        if pv.panel_users:
+            lines.append(_T["del_panel_on" if panel else "del_panel_off"])
+        lines.append(_T["del_after"])
+        return "\n".join(lines)
+
+    async def _delete_screen(self, ctx: ScreenCtx, arg: Any) -> View | Redirect:
+        parts = _split(arg, 2)
+        uid = _uid(parts[0]) if parts else None
+        if uid is None or self.deleter is None:
+            return Redirect(USERS_HUB, toast=_T["not_found"])
+        panel = parts is not None and parts[1] != "0"
+        async with self.db.read() as conn:
+            pv = await self.deleter.preview(conn, uid)
+        if pv is None:
+            return View(text=_T["not_found"], keyboard=self._back_after_delete(ctx.user, uid))
+        back = [nav_button(_T["to_card"], SCREEN_CARD, arg=str(uid))]
+        if not await self._may_delete(ctx.user, pv.user_id, pv.role, pv.telegram_id, pv.staff_role_id):
+            reason = "это вы" if pv.user_id == ctx.user.user_id else "это сотрудник или владелец"
+            return View(text=_T["del_refused"].format(text=reason), keyboard=[back])
+        rows: list[list[InlineKeyboardButton]] = []
+        if pv.panel_users:
+            label = _T["b_panel_on" if panel else "b_panel_off"]
+            rows.append([nav_button(label, SCREEN_DELETE, arg=f"{uid}:{0 if panel else 1}")])
+        go = f"{uid}:{1 if panel and pv.panel_users else 0}"
+        rows.append(
+            [
+                nav_button(_T["b_del_yes"], ACTIONS, "del", go, style="danger"),
+                nav_button(_T["b_del_no"], SCREEN_CARD, arg=str(uid)),
+            ]
+        )
+        return View(text=self._delete_text(pv, panel), parse_mode="HTML", keyboard=rows)
+
+    async def _a_delete(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:
+        parts = _split(arg, 2)
+        uid = _uid(parts[0]) if parts else None
+        if uid is None or parts is None or parts[1] not in ("0", "1") or self.deleter is None:
+            return Toast(_T["not_found"])
+        result = await self.deleter.delete(self._tg(ctx), uid, panel=parts[1] == "1")
+        if result.denied:
+            return View(text=roles.DENIED, keyboard=[[nav_button(_T["admin"], ADMIN_HOME)]])
+        if result.ok:
+            who = _esc(result.name or _T["no_name"])
+            if result.telegram_id is not None:
+                who += f" · ID <code>{result.telegram_id}</code>"
+            if result.panel_deleted:
+                panel_line = _T["del_done_panel"]
+            else:
+                panel_line = _T["del_done_kept"] if result.panel_kept else _T["del_done_none"]
+            view = View(
+                text=_T["del_done"].format(who=who, panel=panel_line),
+                parse_mode="HTML",
+                keyboard=self._back_after_delete(ctx.user, uid),
+            )
+            self._last_card.pop(ctx.user.user_id, None)
+            self._counts = None
+            return view
+        if result.code == "panel":
+            return View(
+                text=_T["del_failed"].format(text=_esc(result.text)),
+                parse_mode="HTML",
+                keyboard=[
+                    [nav_button(_T["b_bot_only"], ACTIONS, "del", f"{uid}:0", style="danger")],
+                    [nav_button(_T["b_retry"], ACTIONS, "del", f"{uid}:1")],
+                    [nav_button(_T["to_card"], SCREEN_CARD, arg=str(uid))],
+                ],
+            )
+        if result.code == "not_found":
+            return View(text=_esc(result.text), keyboard=self._back_after_delete(ctx.user, uid))
+        return await self.card_view(ctx, uid, note=_T["fail"].format(text=_esc(result.text)))
 
     # ------------------------------------------------------------ actions → forms
 

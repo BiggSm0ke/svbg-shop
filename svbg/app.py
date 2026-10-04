@@ -392,6 +392,9 @@ class AppDeps:
     referral: ReferralService | None = None
     #: ``settings_notes(section_id)``: extra HTML lines for a settings section (a payment's webhook address).
     settings_notes: Callable[[str], list[str]] | None = None
+    #: Why panel writes are stopped by the shadow probe (``None``: they are not). Direct panel writes outside
+    #: the outbox (the admin's «🗑 Удалить полностью») check it.
+    writes_stopped: Callable[[], str | None] = field(default=lambda: None)
 
     async def owner_ids(self) -> frozenset[int]:
         return await self.users.owner_ids()
@@ -2127,6 +2130,7 @@ class App:
             ads=self.ads,
             referral=self.referral,
             settings_notes=self._settings_notes,
+            writes_stopped=lambda: self._writer_stopped,
         )
         self._build_user_path(dp, screens, users, content, hub)
 

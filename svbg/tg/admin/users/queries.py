@@ -23,15 +23,20 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncConnection
 
 __all__ = [
+    "DIR_FILTERS",
+    "DIR_PAGE",
     "LIVE_STATES",
     "PAGE",
     "Card",
+    "DirRow",
     "EventRow",
     "LedgerRow",
     "ListRow",
     "OrderRow",
     "PaymentRow",
     "banned_users",
+    "count_directory",
+    "list_directory",
     "load_card",
     "load_events",
     "load_ledger",
@@ -79,6 +84,7 @@ class Card:
     last_paid_at: datetime | None = None
     orders_count: int = 0
     captcha_passed: bool = True  # the entry captcha (``users.captcha_passed_at``)
+    staff_role_id: int | None = None  # a custom staff role (``svbg.services.staff_roles``)
 
     @property
     def live(self) -> bool:
@@ -166,6 +172,7 @@ async def load_card(conn: AsyncConnection, user_id: int, *, currency: str) -> Ca
             users.c.bot_blocked_at,
             users.c.wallet_minor,
             users.c.captcha_passed_at,
+            users.c.staff_role_id,
             sub,
             pay.c.paid_count,
             pay.c.paid_total,
@@ -217,6 +224,7 @@ async def load_card(conn: AsyncConnection, user_id: int, *, currency: str) -> Ca
         last_paid_at=row["last_paid_at"],
         orders_count=int(row["orders_count"] or 0),
         captcha_passed=row["captcha_passed_at"] is not None,
+        staff_role_id=int(row["staff_role_id"]) if row["staff_role_id"] is not None else None,
     )
 
 
@@ -477,3 +485,129 @@ async def banned_users(conn: AsyncConnection, *, limit: int = 20) -> list[ListRo
     return [
         ListRow(int(r.id), r.first_name, r.username, r.banned_at) for r in (await conn.execute(stmt)).all()
     ]
+
+
+# ------------------------------------------------------------------ «📋 Все пользователи»
+
+DIR_PAGE: Final = 10
+#: Filters of the full list in button order: all, active, trial, expired, no subscription, banned, no captcha.
+DIR_FILTERS: Final[tuple[str, ...]] = ("all", "act", "trial", "exp", "nosub", "ban", "nocap")
+
+
+@dataclass(frozen=True, slots=True)
+class DirRow:
+    """A row of the full list: the person and their current subscription (live first, then the latest)."""
+
+    user_id: int
+    first_name: str | None
+    username: str | None
+    banned: bool
+    sub_id: int | None
+    link_state: str | None
+    is_trial: bool
+    paid_until: datetime | None
+    hold_kind: str | None
+
+
+def _current_sub() -> Any:
+    """The same subscription the card shows: the latest live one, else the latest at all."""
+    s = subscriptions.alias("cur_s")
+    return (
+        sa.select(
+            s.c.id.label("sub_id"),
+            s.c.link_state,
+            s.c.is_trial,
+            s.c.paid_until,
+            s.c.hold_kind,
+        )
+        .where(s.c.user_id == users.c.id)
+        .order_by(s.c.link_state.in_(LIVE_STATES).desc(), s.c.id.desc())
+        .limit(1)
+        .lateral("cur")
+    )
+
+
+def _conditions(cur: Any) -> dict[str, Any]:
+    # A frozen subscription still has paid time: it counts as running.
+    running = sa.and_(
+        cur.c.link_state.in_(LIVE_STATES),
+        sa.or_(sa.func.coalesce(cur.c.paid_until > sa.func.now(), False), cur.c.hold_kind.is_not(None)),
+    )
+    return {
+        "all": sa.true(),
+        "act": sa.and_(running, cur.c.is_trial.is_(False)),
+        "trial": sa.and_(running, cur.c.is_trial.is_(True)),
+        "exp": sa.and_(cur.c.sub_id.is_not(None), sa.not_(running)),
+        "nosub": cur.c.sub_id.is_(None),
+        "ban": users.c.banned_at.is_not(None),
+        "nocap": sa.and_(users.c.captcha_passed_at.is_(None), users.c.role == "user"),
+    }
+
+
+async def list_directory(
+    conn: AsyncConnection,
+    flt: str,
+    *,
+    before: int | None = None,
+    after: int | None = None,
+    limit: int = DIR_PAGE,
+) -> list[DirRow]:
+    """One page of the full list, newest first (keyset by ``users.id``): ``before`` — the next page (ids below
+    it), ``after`` — the previous page (ids above it). ``limit + 1`` rows are read when going forward, so the
+    caller knows whether there is a next page. One SQL."""
+    cur = _current_sub()
+    cond = _conditions(cur).get(flt)
+    if cond is None:
+        raise ValueError(f"unknown filter {flt!r}")
+    stmt = (
+        sa.select(
+            users.c.id,
+            users.c.first_name,
+            users.c.username,
+            users.c.banned_at,
+            cur.c.sub_id,
+            cur.c.link_state,
+            cur.c.is_trial,
+            cur.c.paid_until,
+            cur.c.hold_kind,
+        )
+        .select_from(users.outerjoin(cur, sa.true()))
+        .where(cond)
+    )
+    if after is not None:
+        stmt = stmt.where(users.c.id > after).order_by(users.c.id.asc()).limit(limit)
+    else:
+        if before is not None:
+            stmt = stmt.where(users.c.id < before)
+        stmt = stmt.order_by(users.c.id.desc()).limit(limit + 1)
+    rows = [
+        DirRow(
+            int(r.id),
+            r.first_name,
+            r.username,
+            r.banned_at is not None,
+            r.sub_id,
+            r.link_state,
+            bool(r.is_trial),
+            r.paid_until,
+            r.hold_kind,
+        )
+        for r in (await conn.execute(stmt)).all()
+    ]
+    if after is not None:
+        rows.reverse()
+    return rows
+
+
+async def count_directory(conn: AsyncConnection) -> dict[str, int]:
+    """How many people each filter of the full list has (one SQL; the screen caches it for a minute)."""
+    cur = _current_sub()
+    conds = _conditions(cur)
+    stmt = sa.select(
+        *(
+            (sa.func.count() if name == "all" else sa.func.count().filter(cond)).label(name)
+            for name, cond in conds.items()
+        )
+    ).select_from(users.outerjoin(cur, sa.true()))
+    row = (await conn.execute(stmt)).mappings().one()
+    return {name: int(row[name] or 0) for name in DIR_FILTERS}

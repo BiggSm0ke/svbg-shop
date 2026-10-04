@@ -351,7 +351,7 @@ def _money(amount: int, currency: str) -> str:
 
 
 def _actor(user: UserCtx) -> Actor:
-    return Actor(user.user_id, user.telegram_id, user.role, user.perms)
+    return roles.actor_of(user)
 
 
 def _sum_text(amounts: dict[str, int]) -> str:

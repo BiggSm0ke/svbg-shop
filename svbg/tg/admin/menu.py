@@ -140,8 +140,9 @@ HUBS: Final[dict[str, Hub]] = {
             nav.HUB_USERS,
             "Поиск, новые клиенты, оплаты и блокировки.",
             (
-                Entry("🔍 Найти", "au.find", role="support"),
-                Entry("🆕 Новые", "au.new", role="support"),
+                Entry("🔍 Найти", "au.find", role="support", perm="users.view"),
+                Entry("🆕 Новые", "au.new", role="support", perm="users.view"),
+                Entry("📋 Все пользователи", "au.all", role="support", perm="users.view"),
                 Entry("💳 Недавно оплатили", "au.paid", perm="stats"),
                 Entry("⛔ Заблокированные", "au.ban", perm="users.ban"),
                 _slice("🚪 Вход в бот", "u.access"),
@@ -200,7 +201,7 @@ HUBS: Final[dict[str, Hub]] = {
                 Entry("🔌 Панель Remnawave", nav.PANEL, role="owner"),
                 Entry("💾 Бэкапы и обновления", "ops", role="owner"),
                 _slice("🛠 Техработы", "sys.maint"),
-                Entry("👮 Команда", "roles", role="owner"),
+                Entry("👮 Команда", "roles", role="support", perm="roles.manage"),
                 _slice("🧭 Основное", "sys.main"),
                 _slice("🧰 Сервер и .env", "sys.server", role="owner"),  # the log level alone is not a reason
                 Entry("🔎 Все настройки", "settings_root", perm="settings.business"),
@@ -211,7 +212,7 @@ HUBS: Final[dict[str, Hub]] = {
             "Дополнительные модули, подключённые к боту.",
             (
                 Entry("🌐 Трафик LTE", "lte", perm="lte.view"),
-                Entry("🛡 IP Guard", "ipguard", role="support"),
+                Entry("🛡 IP Guard", "ipguard", role="support", perm="ip_guard.view"),
             ),
             role="support",
         ),
@@ -240,7 +241,7 @@ class _Search:
 
 
 def _actor(user: UserCtx) -> Actor:
-    return Actor(user.user_id, user.telegram_id, user.role, user.perms)
+    return roles.actor_of(user)
 
 
 def _esc(value: Any) -> str:
@@ -301,7 +302,9 @@ class AdminMenu:
         if entry.target == "set.key" and entry.arg:
             return self._key_visible(user, entry.arg)
         required = entry.requires or (entry.target if entry.action == codec.ACTION_OPEN else None)
-        return required is None or nav.has_screen(self.router, required)
+        return required is None or (
+            nav.has_screen(self.router, required) and nav.can_open(self.router, user, required)
+        )
 
     def _key_visible(self, user: UserCtx, key: str) -> bool:
         registry = getattr(self.settings, "registry", None)
@@ -364,7 +367,7 @@ class AdminMenu:
         quick = [
             e
             for e in (
-                Entry(_T["b_find"], "au.find", role="support"),
+                Entry(_T["b_find"], "au.find", role="support", perm="users.view"),
                 Entry(_T["b_broadcast"], "bc", perm="broadcast"),
             )
             if self.visible(user, e)

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Final, Literal
 
 from svbg.core.money import format_money
+from svbg.core.perms import ROLES_MANAGE, implicit
 
 __all__ = [
     "PLACEHOLDER_NONE",
@@ -60,6 +61,8 @@ class UserCtx:
     segments: frozenset[str] = frozenset()  # tags for the ``segment:<tag>`` condition atom
     currency: str = "RUB"  # shop currency used by the ``{balance}`` placeholder
     captcha_passed: bool = True  # ``users.captcha_passed_at`` is set (svbg.tg.user.captcha)
+    #: ``users.staff_role_id``: a member of a custom role has exactly the role's rights (svbg.core.perms).
+    staff_role: int | None = None
     _placeholders: dict[str, str] | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -72,12 +75,23 @@ class UserCtx:
         return role_at_least(self.role, minimum)
 
     def has_perm(self, perm: str) -> bool:
-        """Owner has every permission; others need it in ``perms`` (``*`` grants all non-owner perms)."""
+        """Owner has every permission; a custom role's member exactly the role's ``perms``; other staff need
+        it in ``perms`` (``*`` grants all non-owner perms) or have it by rank (the Support column, module
+        views: :func:`svbg.core.perms.implicit`); «Команда и роли» comes only with a custom role."""
         if self.role == "owner":
             return True
         if self.role == "user":
             return False
-        return perm in self.perms or "*" in self.perms
+        if self.staff_role is not None:
+            return perm in self.perms
+        if perm == ROLES_MANAGE:  # «Команда и роли» comes only with a custom role
+            return False
+        return perm in self.perms or implicit(perm) or "*" in self.perms
+
+    @property
+    def scoped(self) -> bool:
+        """A member of a custom role (nothing by rank)."""
+        return self.staff_role is not None and self.role != "owner"
 
     def placeholders(self) -> Mapping[str, str]:
         """Values for ``{days_left}`` / ``{balance}`` placeholders (computed once per context)."""
