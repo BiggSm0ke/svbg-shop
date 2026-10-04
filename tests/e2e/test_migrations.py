@@ -24,7 +24,7 @@ from tests.pgcluster import PgCluster
 
 pytestmark = pytest.mark.pg
 
-HEAD = "0006_captcha"
+HEAD = "0007_staff_roles"
 
 _COLUMNS = """
 select table_name, column_name, ordinal_position, data_type, udt_name, is_nullable, column_default,

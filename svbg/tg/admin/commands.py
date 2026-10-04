@@ -3,9 +3,9 @@
 Users keep the default list. For a staff member the bot sets ``setMyCommands`` with
 ``BotCommandScopeChat(chat_id=<their Telegram id>)``: owners and admins get the commands their rights allow
 (``/admin``, ``/user``, ``/broadcast``, ``/plans``, ``/promos``, ``/status``, ``/settings``), support gets
-``/admin`` and ``/user``. The menus are set once after the bot starts (in the background) and again for one
-person after the owner changes their role (:func:`role_changed`, called by «👮 Команда»); a former staff
-member gets ``deleteMyCommands`` for that chat.
+``/admin`` and ``/user``; a member of a custom role gets the commands of the role's rights. The menus are set
+once after the bot starts (in the background) and again for everyone a change of «👮 Команда» touched
+(:func:`role_changed`); a former staff member gets ``deleteMyCommands`` for that chat.
 
 A chat that never wrote to the bot answers «chat not found»: skipped quietly, the next role change or restart
 tries again.
@@ -48,7 +48,7 @@ class StaffCommand:
 
 COMMANDS: Final[tuple[StaffCommand, ...]] = (
     StaffCommand("admin", "Админка", "support"),
-    StaffCommand("user", "Найти пользователя", "support"),
+    StaffCommand("user", "Найти пользователя", "support", perm="users.view"),
     StaffCommand("broadcast", "Рассылки", perm="broadcast"),
     StaffCommand("plans", "Тарифы", perm="plans"),
     StaffCommand("promos", "Промокоды", perm="promo"),
@@ -59,9 +59,9 @@ COMMANDS: Final[tuple[StaffCommand, ...]] = (
 _RANK: Final = {"user": 0, "support": 1, "admin": 2, "owner": 3}
 
 
-def commands_for(role: str, perms: Iterable[str] = ()) -> list[BotCommand]:
-    """The commands of one staff member (empty for a plain user)."""
-    actor = roles.Actor(None, None, role, frozenset(perms))
+def commands_for(role: str, perms: Iterable[str] = (), *, scoped: bool = False) -> list[BotCommand]:
+    """The commands of one staff member (empty for a plain user); ``scoped`` — a member of a custom role."""
+    actor = roles.Actor(None, None, role, frozenset(perms), scoped=scoped and role != "owner")
     return [
         BotCommand(command=c.command, description=c.description)
         for c in COMMANDS
@@ -80,11 +80,13 @@ def for_router(router: Any) -> StaffCommands | None:
     return _BY_ROUTER.get(router)
 
 
-def role_changed(router: Any, telegram_id: int | None, role: str, perms: Iterable[str] = ()) -> None:
+def role_changed(
+    router: Any, telegram_id: int | None, role: str, perms: Iterable[str] = (), *, scoped: bool = False
+) -> None:
     """Refresh one person's menu after a role change (in the background; no-op when menus are not wired)."""
     staff = for_router(router)
     if staff is not None and telegram_id is not None:
-        staff.spawn(staff.apply(telegram_id, role, tuple(perms)))
+        staff.spawn(staff.apply(telegram_id, role, tuple(perms), scoped=scoped))
 
 
 class StaffCommands:
@@ -122,9 +124,11 @@ class StaffCommands:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
 
-    async def apply(self, telegram_id: int, role: str, perms: Iterable[str] = ()) -> bool:
+    async def apply(
+        self, telegram_id: int, role: str, perms: Iterable[str] = (), *, scoped: bool = False
+    ) -> bool:
         """Set (or, for a plain user, delete) the menu of one chat. ``False``: Telegram refused."""
-        commands = commands_for(role, perms)
+        commands = commands_for(role, perms, scoped=scoped)
         scope = BotCommandScopeChat(chat_id=telegram_id)
         method: Any = (
             SetMyCommands(commands=commands, scope=scope) if commands else DeleteMyCommands(scope=scope)
@@ -142,7 +146,7 @@ class StaffCommands:
 
     async def sync_all(self) -> int:
         """Menus of every staff member (stored roles and owners from the settings); how many were set."""
-        members: dict[int, tuple[str, tuple[str, ...]]] = {}
+        members: dict[int, tuple[str, tuple[str, ...], bool]] = {}
         if self.db is not None:
             try:
                 async with self.db.read() as conn:
@@ -152,12 +156,12 @@ class StaffCommands:
                 staff = []
             for m in staff:
                 if m.telegram_id is not None and m.banned_at is None:
-                    members[m.telegram_id] = (m.role, m.perms)
+                    members[m.telegram_id] = (m.role, m.perms, m.scoped)
         for tg in self.configured_owners():
-            members[int(tg)] = ("owner", ())
+            members[int(tg)] = ("owner", (), False)
         done = 0
-        for tg, (role, perms) in members.items():
-            done += await self.apply(tg, role, perms)
+        for tg, (role, perms, scoped) in members.items():
+            done += await self.apply(tg, role, perms, scoped=scoped)
         return done
 
     async def sync_later(self, delay: float = SYNC_DELAY) -> None:

@@ -100,7 +100,7 @@ async def test_every_role_walks_its_sections(start_app: StartApp, app_env: AppEn
         assert {d.split(":")[1] for d in seen} >= {"adm.u", "adm.mk", "prm", "ads"}
         assert not {"adm.pay", "adm.sys", "plans", "apay", "bc"} & {d.split(":")[1] for d in seen}
         seen = await walk(helper)
-        assert {d.split(":")[1] for d in seen} <= {"adm.u", "au.find", "au.new", "adm.x", "ipguard"}
+        assert {d.split(":")[1] for d in seen} <= {"adm.u", "au.find", "au.new", "au.all", "adm.x", "ipguard"}
         assert "Выручка" not in helper.text()
 
 

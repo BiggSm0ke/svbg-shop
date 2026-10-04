@@ -60,7 +60,7 @@ async def test_setup_wires_everything(db: CountingDatabase) -> None:
         db=db, settings=settings, users=Directory(), notifier=FakeNotifier(), catalog=catalog, attention=None
     )
     assert isinstance(users_module.setup(router, deps), Router)
-    assert roles_screens.setup(router, deps) is None
+    assert isinstance(roles_screens.setup(router, deps), Router)  # the «добавить в команду» search
     assert isinstance(dashboard.setup(router, deps), Router)
 
     from tests.tg.admin.users.kit import UEnv

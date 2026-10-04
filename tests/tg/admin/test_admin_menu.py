@@ -460,7 +460,8 @@ async def test_user_lists(menv: MEnv) -> None:
     await add_payment(menv.db, inst, uid, 49_900)
     await menv.db.raw("update users set banned_at = now() where id = $1", uid)
     await menv.click(SUPPORT, encode(nav.HUB_USERS))
-    assert [lb for lb in menv.labels() if lb != "🛠 Админка"] == ["🔍 Найти", "🆕 Новые"]
+    hub = [lb for lb in menv.labels() if lb != "🛠 Админка"]
+    assert hub == ["🔍 Найти", "🆕 Новые", "📋 Все пользователи"]
     await menv.press(SUPPORT, "🆕 Новые")
     assert "<b>🆕 Новые</b>" in menv.text and any(lb.startswith("Иван @ivan_petrov") for lb in menv.labels())
     await menv.click(OWNER, encode("au.paid"))
