@@ -65,7 +65,7 @@ async def test_promos_command(env: UiEnv, service: PromoService, catalog: FakeCa
 async def test_create_a_wallet_code(env: UiEnv) -> None:
     await env.click(ADMIN, encode(SCREEN_LIST))
     await env.press(ADMIN, "Новый промокод")
-    assert "Что он даёт" in env.text and len(env.labels()) == 8
+    assert "Что он даёт" in env.text and len(env.labels()) == 9  # 7 kinds, «⬅️ Промокоды», «🛠 Админка»
     await env.press(ADMIN, "На баланс")
     assert "Код промокода" in env.text
     await env.type(ADMIN, "bad code")
@@ -221,7 +221,7 @@ async def test_card_edits(env: UiEnv) -> None:
     await env.press(OWNER, "Тарифы")
     await env.press(OWNER, "Тариф 2")
     assert "✅ Тариф 2" in env.labels()
-    await env.press(OWNER, "К промокоду")
+    await env.press(OWNER, "⬅️ Промокод")
     assert "Тарифы: Тариф 2" in env.text
     await env.press(OWNER, "✏️ Код")
     await env.type(OWNER, "WINTER")
@@ -232,7 +232,7 @@ async def test_card_edits(env: UiEnv) -> None:
 async def test_forged_arguments(env: UiEnv) -> None:
     pid = await add_promo(env.db, "X1X", "wallet", amount_minor=100, currency="RUB")
     await env.click(OWNER, encode(SCREEN_CARD, arg="abc"))
-    assert "<b>Промокоды</b>" in env.text  # back to the list
+    assert "<b>🎟 Промокоды</b>" in env.text  # back to the list
     for data in (
         encode(ACTIONS, "edit", f"{pid}:nope"),
         encode(ACTIONS, "edit", "9999:max"),
@@ -296,7 +296,7 @@ async def test_user_enters_codes(env: UiEnv, service: PromoService) -> None:
     await env.click(USER, encode("sys", "promo"))
     assert "Отправьте промокод" in env.text
     await env.type(USER, "week")
-    assert "сначала оформите" in env.text and "Другой код" in " ".join(env.labels())
+    assert "Сначала оформите" in env.text and "Другой код" in " ".join(env.labels())
     await add_sub(env.db, uid)
     await env.press(USER, "Другой код")
     await env.type(USER, "WEEK")
@@ -305,5 +305,5 @@ async def test_user_enters_codes(env: UiEnv, service: PromoService) -> None:
     await env.type(USER, "sale")
     assert "Скидка применится при оплате" in env.text and "Купить" in env.labels()[0]
     await env.click(USER, encode(USER_SCREEN))
-    assert env.text.startswith("🏷 Уже ждёт оплаты: промокод SALE — −10 % на покупку.")
+    assert env.text.startswith("Уже ждёт оплаты промокод SALE: −10 % на покупку.")
     assert service.pending(uid) is not None

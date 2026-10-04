@@ -118,8 +118,8 @@ async def test_attached_job_sends_welcomes_and_publishes(env: Env) -> None:
     by_chat = await _chats(env)
     assert by_chat[referrer][0].startswith("👥 Новый друг по вашей ссылке: Боб!")
     assert "+14 дн." in by_chat[referrer][0]
-    assert by_chat[newbie][0].startswith("🎉 You were invited by @anya.")
-    assert "+7 days" in by_chat[newbie][0]
+    assert by_chat[newbie][0].startswith("🎉 Вы пришли по приглашению @anya.")  # stored "en" is ignored
+    assert "+7 дн." in by_chat[newbie][0]
     assert [(e.payload["user_id"], e.payload["referrer_id"]) for e in env.events] == [(newbie, referrer)]
     assert await jobs(env.db, "referral.pair", "done") == []  # trial_or_paid: nothing to grant yet
 

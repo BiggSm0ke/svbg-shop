@@ -64,19 +64,17 @@ ACTIONS: Final = "pgsa"
 F_NEW: Final = "pgs.f.new"
 F_TITLE: Final = "pgs.f.title"
 CAPTURE_TTL_S: Final = 900.0
-LANGS: Final = ("ru", "en")
 PREVIEW_CHARS: Final = 300
 
 _T: Final[dict[str, str]] = {
-    "list_title": "📄 <b>Страницы</b>\n"
-    "FAQ, правила, оферта, согласие и свои страницы. Включённые видят пользователи.",
+    "list_hint": "FAQ, правила, оферта, согласие и свои страницы. Включённые видят пользователи, "
+    "выключенные видны только здесь.",
     "new": "➕ Новая страница",
-    "to_list": "⬅️ К страницам",
-    "to_card": "⬅️ К странице",
+    "to_list": "⬅️ Страницы",
+    "to_card": "⬅️ Страница",
     "on": "🟢 включена",
     "off": "⏸ выключена",
     "b_text": "✏️ Текст",
-    "b_text_lang": "🌐 Текст ({lang})",
     "b_title": "🏷 Название",
     "b_on": "▶️ Включить",
     "b_off": "⏸ Выключить",
@@ -85,7 +83,7 @@ _T: Final[dict[str, str]] = {
     "b_consent": "📢 Запросить согласие заново",
     "b_delete": "🗑 Удалить",
     "cancel": "✖️ Отмена",
-    "wait": "✏️ <b>{title}</b> ({lang})\n\nПришлите новый текст страницы одним сообщением. "
+    "wait": "✏️ <b>{title}</b>\n\nПришлите новый текст страницы одним сообщением. "
     "Оформление Telegram (жирный, ссылки, спойлеры, цитаты, премиум-эмодзи) сохранится как есть. "
     "До 4096 символов.",
     "wait_text_only": "Нужен текст сообщением (фото и файлы на страницах не поддерживаются).",
@@ -304,7 +302,8 @@ class PageAdminScreens:
             rows.append([nav_button(label[:64], SCREEN_CARD, arg=page.code)])
         rows.append([nav_button(_T["new"], ACTIONS, "new")])
         rows.append(nav.back_row(SCREEN_LIST))
-        return View(text=_T["list_title"], parse_mode="HTML", keyboard=rows)
+        text = f"{nav.header(SCREEN_LIST)}\n\n{_T['list_hint']}"
+        return View(text=text, parse_mode="HTML", keyboard=rows)
 
     async def _card_screen(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:
         page = self._page(arg)
@@ -317,11 +316,9 @@ class PageAdminScreens:
         preview = block.text if block is not None else ""
         if len(preview) > PREVIEW_CHARS:
             preview = preview[:PREVIEW_CHARS] + "…"
-        langs = ", ".join(sorted(page.body)) or "—"
         lines = [
             f"<b>{_esc(page.title_for(DEFAULT_LANG))}</b> · {_T['on'] if page.enabled else _T['off']}",
             f"Код: <code>{page.code}</code> · версия {page.version} · {self._when(page)}",
-            f"Языки текста: {langs}",
             f"Кнопка в конструкторе: <code>screen:{ALIAS_PREFIX}{page.code}</code>",
         ]
         if page.kind == "consent":
@@ -337,41 +334,37 @@ class PageAdminScreens:
         rows: list[list[InlineKeyboardButton]] = [
             [
                 nav_button(_T["b_text"], SCREEN_WAIT, arg=f"{code}:{DEFAULT_LANG}"),
-                *(
-                    nav_button(_T["b_text_lang"].format(lang=lang.upper()), SCREEN_WAIT, arg=f"{code}:{lang}")
-                    for lang in LANGS
-                    if lang != DEFAULT_LANG
-                ),
+                nav_button(_T["b_title"], ACTIONS, "title", code),
             ],
             [
-                nav_button(_T["b_title"], ACTIONS, "title", code),
+                nav_button(_T["b_off"] if page.enabled else _T["b_on"], ACTIONS, "en", code),
                 nav_button(_T["b_versions"], SCREEN_VERSIONS, arg=code),
             ],
-            [nav_button(_T["b_off"] if page.enabled else _T["b_on"], ACTIONS, "en", code)],
             [nav_button(_T["b_preview"], USER_SCREEN, arg=code)],
         ]
         if page.kind == "consent" and page.enabled:
             rows.append([nav_button(_T["b_consent"], ACTIONS, "cons", f"{code}:{page.version}")])
         if not page.system:
             rows.append([nav_button(_T["b_delete"], SCREEN_DELETE, arg=code)])
-        rows.append([nav_button(_T["to_list"], SCREEN_LIST)])
+        rows.append(nav.with_admin([nav_button(_T["to_list"], SCREEN_LIST)]))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     # ------------------------------------------------------------ text capture
 
     async def _wait_screen(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:
         parts = arg.split(":") if isinstance(arg, str) else []
-        page = self._page(parts[0]) if len(parts) == 2 and parts[1] in LANGS else None
+        # ``<code>:<lang>``: an old «🌐 Текст (EN)» button edits the Russian text (the bot is Russian-only)
+        page = self._page(parts[0]) if len(parts) == 2 else None
         if page is None or ctx.user.telegram_id is None:
             return Redirect(SCREEN_LIST, toast=_T["not_found"])
-        lang = parts[1]
+        lang = DEFAULT_LANG
         self._capture[ctx.user.telegram_id] = _Capture(
             page.code, lang, page.version, time.monotonic() + CAPTURE_TTL_S
         )
         await self.router.ui_state.set_awaiting(
             ctx.user.user_id, None
         )  # a half-filled form must not eat the text
-        text = _T["wait"].format(title=_esc(page.title_for(DEFAULT_LANG)), lang=lang.upper())
+        text = _T["wait"].format(title=_esc(page.title_for(DEFAULT_LANG)))
         note = self._note(ctx)
         if note:
             text = f"⚠️ {_esc(note)}\n\n{text}"
@@ -463,7 +456,7 @@ class PageAdminScreens:
                     )
                 ]
             )
-        rows.append([nav_button(_T["to_card"], SCREEN_CARD, arg=page.code)])
+        rows.append(nav.with_admin([nav_button(_T["to_card"], SCREEN_CARD, arg=page.code)]))
         return View(
             text=_T["versions_title"].format(title=_esc(page.title_for(DEFAULT_LANG))),
             parse_mode="HTML",

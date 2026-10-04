@@ -91,6 +91,8 @@ A_FALLBACK: Final = "fb"
 A_OFF: Final = "off"
 A_OFF_YES: Final = "offok"
 A_NODES: Final = "nodes"  # NOTIFY_ADMIN_NODES on / off
+ARG_TOPICS: Final = "t"  # ``achat`` with this argument: «🗂 Темы», the switches of the topics
+SCREEN_TOPICS: Final = "achat.t"  # breadcrumb key only (the topics are ``achat:o:t``)
 K_NODES: Final = "NOTIFY_ADMIN_NODES"
 CANCEL_TEXT: Final = "✖️ Не подключать"
 _CHAT_ARG_RE: Final = re.compile(r"^-\d{1,19}$")
@@ -114,7 +116,10 @@ BOT_RIGHTS: Final = ChatAdministratorRights(
 )
 
 _T: Final[dict[str, str]] = {
-    "title": "🔔 <b>Админ-чат</b>",
+    "topics_name": "🗂 Темы",
+    "topics_count": "Темы: включено {on} из {total}.",
+    "b_topics": "🗂 Темы · {on} из {total}",
+    "to_chat": "⬅️ Админ-группа",
     "off_intro": (
         "Сейчас уведомления приходят вам в личку.\n\n"
         "Подключите супергруппу с темами — бот сам создаст темы «Оплаты», «Ошибки», «Система» и другие "
@@ -131,8 +136,8 @@ _T: Final[dict[str, str]] = {
     "on_ok": "Состояние: ✅ работает",
     "on_down": "Состояние: ⚠️ недоступна ({reason}) — уведомления идут вам в личку",
     "on_topics": (
-        "Темы — нажмите, чтобы включить или выключить. Сообщения выключенной темы: ↪️ в «Систему» "
-        "или 🚫 не отправляются."
+        "Нажмите на тему, чтобы включить или выключить её. Сообщения выключенной темы уходят в «Систему» "
+        "(↪️) или не отправляются (🚫)."
     ),
     "topic_on": "✅ {label}",
     "topic_off": "⬜ {label}",
@@ -145,7 +150,6 @@ _T: Final[dict[str, str]] = {
     "recheck": "🔄 Проверить снова",
     "other": "👥 Другая группа",
     "off": "🔌 Отключить",
-    "back": "⬅️ Назад",
     "nodes_on": "✅ Сообщать, когда нода панели падает",
     "nodes_off": "⬜ Сообщать, когда нода панели падает",
     "nodes_done_on": "Сообщения о нодах включены",
@@ -328,8 +332,10 @@ class ConnectChat:
         return defn.title if defn is not None else kind
 
     async def _screen(self, ctx: ScreenCtx, arg: Any) -> View:
+        if arg == ARG_TOPICS and self._service.chat_id is not None:
+            return self._topics_view()
         outcome = self._outcomes.pop(ctx.user.user_id, None)
-        lines = [_T["title"]]
+        lines = [nav.header(SCREEN)]
         keyboard: list[list[InlineKeyboardButton]] = []
         if outcome is not None:
             lines += ["", *self._outcome_lines(outcome)]
@@ -348,17 +354,11 @@ class ConnectChat:
                 lines.append(_T["on_down"].format(reason=_esc(svc.last_error or "?")))
             else:
                 lines.append(_T["on_ok"])
-            lines += ["", _T["on_topics"]]
-            for defn in svc.topic_defs():
-                st = svc.state(defn.kind)
-                label = _T["topic_on" if st.enabled else "topic_off"].format(label=defn.label)
-                if st.enabled and st.thread_in(chat_id) is None:
-                    label += _T["topic_missing"]
-                row = [nav_button(label, SCREEN, A_TOGGLE, defn.kind)]
-                if not st.enabled:
-                    fb = _T["fb_drop"] if st.fallback == "drop" else _T["fb_system"]
-                    row.append(nav_button(fb, SCREEN, A_FALLBACK, defn.kind))
-                keyboard.append(row)
+            defs = svc.topic_defs()
+            on = sum(1 for d in defs if svc.state(d.kind).enabled)
+            lines.append(_T["topics_count"].format(on=on, total=len(defs)))
+            topics = _T["b_topics"].format(on=on, total=len(defs))
+            keyboard.append([nav_button(topics, SCREEN, arg=ARG_TOPICS)])
             keyboard.append(
                 [nav_button(_T["make_topics"], SCREEN, A_TOPICS), nav_button(_T["recheck"], SCREEN, A_CHECK)]
             )
@@ -368,6 +368,26 @@ class ConnectChat:
             label = _T["nodes_on" if nodes else "nodes_off"]
             keyboard.append([nav_button(label, SCREEN, A_NODES)])
         keyboard.append(nav.back_row(SCREEN))
+        return View(text="\n".join(lines), parse_mode="HTML", keyboard=keyboard)
+
+    def _topics_view(self) -> View:
+        """«🗂 Темы»: a switch per topic of the group; a switched-off topic goes to «Система» or nowhere."""
+        svc = self._service
+        chat_id = svc.chat_id
+        lines = [nav.header(SCREEN_TOPICS, _T["topics_name"]), "", _T["on_topics"]]
+        keyboard: list[list[InlineKeyboardButton]] = []
+        for defn in svc.topic_defs():
+            st = svc.state(defn.kind)
+            label = _T["topic_on" if st.enabled else "topic_off"].format(label=defn.label)
+            if st.enabled and chat_id is not None and st.thread_in(chat_id) is None:
+                label += _T["topic_missing"]
+            row = [nav_button(label, SCREEN, A_TOGGLE, defn.kind)]
+            if not st.enabled:
+                fb = _T["fb_drop"] if st.fallback == "drop" else _T["fb_system"]
+                row.append(nav_button(fb, SCREEN, A_FALLBACK, defn.kind))
+            keyboard.append(row)
+        keyboard.append([nav_button(_T["make_topics"], SCREEN, A_TOPICS)])
+        keyboard.append(nav.with_admin([nav_button(_T["to_chat"], SCREEN)]))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=keyboard)
 
     def _nodes_on(self) -> bool | None:
@@ -457,7 +477,7 @@ class ConnectChat:
             return Toast(_T["unknown_topic"])
         st = self._service.state(kind)
         await self._service.set_enabled(kind, not st.enabled)
-        return await self._screen(ctx, None)
+        return await self._screen(ctx, ARG_TOPICS)
 
     async def _fallback(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:
         kind = arg if isinstance(arg, str) and self._service.topic(arg) is not None else None
@@ -465,7 +485,7 @@ class ConnectChat:
             return Toast(_T["unknown_topic"])
         st = self._service.state(kind)
         await self._service.set_fallback(kind, "system" if st.fallback == "drop" else "drop")
-        return await self._screen(ctx, None)
+        return await self._screen(ctx, ARG_TOPICS)
 
     async def _off(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:
         if self._service.chat_id is None:

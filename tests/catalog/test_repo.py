@@ -136,7 +136,7 @@ async def test_location_edits(db: CountingDatabase, catalog: CatalogService) -> 
         with pytest.raises(ValueError, match="nothing"):
             await repo.set_location(conn, SQ_NL)
     loc = (await catalog.reload()).location(SQ_NL)
-    assert loc is not None and loc.label("ru") == "🇳🇱 Нидерланды" and loc.label("en") == "🇳🇱 Netherlands"
+    assert loc is not None and loc.label("ru") == "🇳🇱 Нидерланды" and loc.label("en") == "🇳🇱 Нидерланды"
     async with db.tx() as conn:
         await repo.set_location(conn, SQ_NL, clear_flag=True, sort=5)
     loc = (await catalog.reload()).location(SQ_NL)

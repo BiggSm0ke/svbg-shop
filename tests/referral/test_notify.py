@@ -1,4 +1,4 @@
-"""Message jobs: recipient's language, overrides with fallback, skipped users, failures, admin topic."""
+"""Message jobs: Russian only, overrides with fallback, skipped users, failures, admin topic."""
 
 from __future__ import annotations
 
@@ -20,13 +20,10 @@ async def _run(env: Env, payload: dict[str, object]) -> None:
     await env.svc.handlers()["referral.notify"](job("referral.notify", payload), None)  # type: ignore[arg-type]
 
 
-async def test_language_of_the_recipient(env: Env) -> None:
-    uid = await add_user(env.db, language="en", tg=777)
+async def test_messages_are_russian_whatever_the_stored_language(env: Env) -> None:
+    uid = await add_user(env.db, language="en", tg=777)  # left from the old bot
     await _run(env, _msg(uid))
-    assert env.sender.sent == [(777, "🎁 +14 days of subscription for inviting @bob!", "HTML")]
-    unknown = await add_user(env.db, language="de", tg=778)
-    await _run(env, _msg(unknown))
-    assert env.sender.sent[-1][1] == "🎁 +14 дн. подписки за приглашённого @bob!"
+    assert env.sender.sent == [(777, "🎁 +14 дн. подписки за приглашённого @bob!", "HTML")]
 
 
 async def test_override_and_broken_override(env: Env) -> None:

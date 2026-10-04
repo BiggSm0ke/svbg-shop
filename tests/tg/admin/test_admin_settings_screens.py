@@ -355,5 +355,5 @@ async def test_payment_instances_are_subsections_not_root_buttons(senv: SEnv) ->
     await senv.press(OWNER, "Платёжка «Telegram Stars»")
     assert "Telegram Stars" in senv.text
     assert any(":" in label for label in senv.labels())  # its keys
-    await senv.press(OWNER, "Назад")
+    await senv.press(OWNER, "⬅️ Платёжки")
     assert any("Платёжка «Telegram Stars»" in label for label in senv.labels())  # back to «Платёжки»

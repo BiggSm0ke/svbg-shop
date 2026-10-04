@@ -6,14 +6,15 @@ Seeding is additive and idempotent: a missing system screen is created, a missin
 
 :data:`SYSTEM_SCREENS` = the stage-0 screens (``menu_fallback``, ``error``, ``settings_root``) + the user path
 screens of :mod:`svbg.tg.user.seeds` (whose ``home`` replaces the stage-0 one) + the module buttons on
-``home`` (:data:`HOME_MODULE_BUTTONS`: «🛠 Админка» — the one staff entry —, «🎟 Промокод», «🤝 Пригласить»,
+``home`` (:data:`HOME_MODULE_BUTTONS`: «🛠 Админка» — the one staff entry —, «🤝 Пригласить»,
 «ℹ️ Информация») + the screen :data:`INFO` (FAQ / rules / offer pages). It is computed on first access
-(PEP 562): the seeds module imports this one.
+(PEP 562): the seeds module imports this one. The bot speaks Russian only: texts are under ``ru``.
 
 The admin itself is code (``svbg.tg.admin.menu``): ``admin`` — the code of the old content hub — is the same
 screen as ``adm``. The old staff buttons of ``home`` («⚙️ Настройки», «📦 Тарифы») are retired
 (:data:`RETIRED_SYSTEM_BUTTONS`): an install that still has them untouched loses them on the next start; a
-button the owner edited stays.
+button the owner edited stays. The same goes for «🌐 Язык» (the bot is Russian-only) and «🎟 Промокод» (promo
+codes live in «👤 Профиль» → «🎟 Промокоды» now).
 
 Module buttons are shown only when the module is wired: the app adds ``flag:promo`` / ``flag:referral``
 (program on) / ``flag:pages`` to every user context. «💬 Поддержка» is not a content button: the home screen
@@ -103,7 +104,7 @@ def _bold_first_line(text: str) -> dict[str, Any]:
 
 _MENU_BUTTON: Final = SeedButton(
     system_key="home",
-    label={"ru": "🏠 Меню", "en": "🏠 Menu"},
+    label={"ru": "🏠 Меню"},
     action={"type": "screen", "target": HOME},
     row=9,
 )
@@ -112,42 +113,30 @@ _MENU_BUTTON: Final = SeedButton(
 BASE_SCREENS: Final[tuple[SeedScreen, ...]] = (
     SeedScreen(
         code=HOME,
-        title={"ru": "Главное меню", "en": "Main menu"},
-        body={
-            "ru": _bold_first_line("👋 Добро пожаловать!\n\nВыберите, что хотите сделать."),
-            "en": _bold_first_line("👋 Welcome!\n\nChoose what you want to do."),
-        },
+        title={"ru": "Главное меню"},
+        body={"ru": _bold_first_line("👋 Добро пожаловать!\n\nВыберите, что хотите сделать.")},
     ),
     SeedScreen(
         code=MENU_FALLBACK,
-        title={"ru": "Меню обновилось", "en": "Menu updated"},
-        body={
-            "ru": {"text": "Меню обновилось. Откройте нужный раздел ещё раз."},
-            "en": {"text": "The menu has been updated. Please open the section again."},
-        },
+        title={"ru": "Меню обновилось"},
+        body={"ru": {"text": "Меню обновилось. Откройте нужный раздел ещё раз."}},
         buttons=(_MENU_BUTTON,),
     ),
     SeedScreen(
         code=ERROR,
-        title={"ru": "Ошибка", "en": "Error"},
+        title={"ru": "Ошибка"},
         body={
             "ru": _bold_first_line(
                 "⚠️ Что-то пошло не так\n\nМы уже знаем об ошибке и разбираемся. "
                 "Попробуйте ещё раз или вернитесь в меню."
-            ),
-            "en": _bold_first_line(
-                "⚠️ Something went wrong\n\nWe already know about it. Please try again or go back to the menu."
             ),
         },
         buttons=(_MENU_BUTTON,),
     ),
     SeedScreen(
         code=SETTINGS_ROOT,
-        title={"ru": "Настройки", "en": "Settings"},
-        body={
-            "ru": _bold_first_line("⚙️ Настройки\n\nРазделы настроек появятся здесь."),
-            "en": _bold_first_line("⚙️ Settings\n\nSettings sections will appear here."),
-        },
+        title={"ru": "Настройки"},
+        body={"ru": _bold_first_line("⚙️ Настройки\n\nРазделы настроек появятся здесь.")},
         buttons=(_MENU_BUTTON,),
     ),
 )
@@ -178,23 +167,57 @@ _OWNER: Final = {"role": "owner"}
 #: «🛠 Админка» on the home screen (staff only) → the admin root (``admin`` is the code alias of ``adm``).
 ADMIN_BUTTON: Final = SeedButton(
     system_key="admin",
-    label={"ru": "🛠 Админка", "en": "🛠 Admin"},
+    label={"ru": "🛠 Админка"},
     action={"type": "screen", "target": ADMIN_MENU},
     row=9,
     sort=2,
     visible_if=_STAFF,
 )
 
-#: User buttons of the stage 3–4 modules on the home screen (each hidden while its module is not wired).
+#: User buttons of the stage 3–4 modules on the home screen (each hidden while its module is not wired): «🤝
+#: Пригласить» next to the balance (row 2), «ℹ️ Информация» under the trial (row 4, «💬 Поддержка» joins it
+#: in code); svbg.tg.user.seeds lays out rows 0–3.
 HOME_MODULE_BUTTONS: Final[tuple[SeedButton, ...]] = (
     ADMIN_BUTTON,
     SeedButton(
-        system_key="promo",
-        label={"ru": "🎟 Промокод", "en": "🎟 Promo code"},
-        action={"type": "system", "name": "promo"},
-        row=4,
-        visible_if={"flag:promo": True},
+        system_key="referral",
+        label={"ru": "🤝 Пригласить"},
+        action={"type": "system", "name": "referral"},
+        row=2,
+        sort=1,
+        visible_if={"flag:referral": True},
     ),
+    SeedButton(
+        system_key="info",
+        label={"ru": "ℹ️ Информация"},
+        action={"type": "screen", "target": INFO},
+        row=4,
+        visible_if={"flag:pages": True},
+    ),
+)
+
+#: The same buttons as v3 (Russian-only, before «👤 Профиль» replaced «Подписка») stored them.
+_HOME_MODULES_V3: Final[tuple[SeedButton, ...]] = (
+    SeedButton(
+        system_key="referral",
+        label={"ru": "🤝 Пригласить"},
+        action={"type": "system", "name": "referral"},
+        row=4,
+        visible_if={"flag:referral": True},
+    ),
+    SeedButton(
+        system_key="info",
+        label={"ru": "ℹ️ Информация"},
+        action={"type": "screen", "target": INFO},
+        row=4,
+        sort=1,
+        visible_if={"flag:pages": True},
+    ),
+)
+
+#: The module buttons of home as the previous version stored them (with their old English labels): rows
+#: still equal to these move to :data:`HOME_MODULE_BUTTONS` on start; «🎟 Промокод» is retired.
+_HOME_MODULES_V2: Final[tuple[SeedButton, ...]] = (
     SeedButton(
         system_key="referral",
         label={"ru": "🤝 Пригласить", "en": "🤝 Invite"},
@@ -211,14 +234,21 @@ HOME_MODULE_BUTTONS: Final[tuple[SeedButton, ...]] = (
         visible_if={"flag:pages": True},
     ),
 )
+_PROMO_BUTTON_V2: Final = SeedButton(
+    system_key="promo",
+    label={"ru": "🎟 Промокод", "en": "🎟 Promo code"},
+    action={"type": "system", "name": "promo"},
+    row=4,
+    visible_if={"flag:promo": True},
+)
 
 
 def _entry(  # noqa: PLR0917 - a flat table row
-    key: str, ru: str, en: str, target: str, row: int, sort: int, visible: Mapping[str, Any]
+    key: str, label: str, target: str, row: int, sort: int, visible: Mapping[str, Any]
 ) -> SeedButton:
     return SeedButton(
         system_key=key,
-        label={"ru": ru, "en": en},
+        label={"ru": label},
         action={"type": "screen", "target": target},
         row=row,
         sort=sort,
@@ -226,22 +256,19 @@ def _entry(  # noqa: PLR0917 - a flat table row
     )
 
 
-def _sys(key: str, ru: str, en: str, row: int) -> SeedButton:
-    return SeedButton(key, {"ru": ru, "en": en}, {"type": "system", "name": key}, row=row)
+def _sys(key: str, label: str, row: int) -> SeedButton:
+    return SeedButton(key, {"ru": label}, {"type": "system", "name": key}, row=row)
 
 
 #: «ℹ️ Информация»: the pages of :mod:`svbg.pages` (a switched-off page answers «Страница недоступна»).
 INFO_SCREEN: Final = SeedScreen(
     code=INFO,
-    title={"ru": "Информация", "en": "Information"},
-    body={
-        "ru": _bold_first_line("ℹ️ Информация\n\nОтветы на частые вопросы, правила и оферта."),
-        "en": _bold_first_line("ℹ️ Information\n\nFAQ, rules and the offer."),
-    },
+    title={"ru": "Информация"},
+    body={"ru": _bold_first_line("ℹ️ Информация\n\nОтветы на частые вопросы, правила и оферта.")},
     buttons=(
-        _sys("faq", "❓ Частые вопросы", "❓ FAQ", 0),
-        _sys("rules", "📜 Правила", "📜 Rules", 1),
-        _sys("offer", "📄 Оферта", "📄 Offer", 2),
+        _sys("faq", "❓ Частые вопросы", 0),
+        _sys("rules", "📜 Правила", 1),
+        _sys("offer", "📄 Оферта", 2),
         _MENU_BUTTON,
     ),
 )
@@ -250,27 +277,24 @@ INFO_SCREEN: Final = SeedScreen(
 #: code screen ``admin`` shadows the row an older install still has.
 ADMIN_SCREEN: Final = SeedScreen(
     code=ADMIN_MENU,
-    title={"ru": "Админка", "en": "Admin"},
-    body={
-        "ru": _bold_first_line("🛠 Админка\n\nВыберите раздел."),
-        "en": _bold_first_line("🛠 Admin\n\nChoose a section."),
-    },
+    title={"ru": "Админка"},
+    body={"ru": _bold_first_line("🛠 Админка\n\nВыберите раздел.")},
     buttons=(
-        _entry("dashboard", "📊 Сводка", "📊 Dashboard", "adm", 0, 0, _STAFF),
-        _entry("users", "👤 Пользователи", "👤 Users", "au.find", 0, 1, _STAFF),
-        _entry("promo", "🎟 Промокоды", "🎟 Promo codes", "prm", 1, 0, _ADMIN),
-        _entry("ads", "📢 Реклама", "📢 Ad links", "ads", 1, 1, _ADMIN),
-        _entry("deeplinks", "🔗 Ссылки", "🔗 Deep links", "dl", 2, 0, _ADMIN),
-        _entry("broadcasts", "📣 Рассылки", "📣 Broadcasts", "bc", 2, 1, _ADMIN),
-        _entry("pages", "📄 Страницы", "📄 Pages", "pgs", 3, 0, _ADMIN),
-        _entry("constructor", "✏️ Конструктор", "✏️ Constructor", "ce.home", 3, 1, _ADMIN),
-        _entry("plans", "📦 Тарифы", "📦 Plans", "plans", 4, 0, _ADMIN),
-        _entry("roles", "🔐 Роли", "🔐 Roles", "roles", 4, 1, _ADMIN),
-        _entry("lte", "🌐 Трафик LTE", "🌐 LTE traffic", "lte", 5, 0, _ADMIN),
-        _entry("ip_guard", "🛡 IP Guard", "🛡 IP Guard", "ipguard", 5, 1, _ADMIN),
-        _entry("settings", "⚙️ Настройки", "⚙️ Settings", SETTINGS_ROOT, 6, 0, _ADMIN),
-        _entry("status", "🩺 Состояние", "🩺 Status", "status", 6, 1, _ADMIN),
-        _entry("ops", "💾 Бэкапы и обновления", "💾 Backups and updates", "ops", 7, 0, _OWNER),
+        _entry("dashboard", "📊 Сводка", "adm", 0, 0, _STAFF),
+        _entry("users", "👤 Пользователи", "au.find", 0, 1, _STAFF),
+        _entry("promo", "🎟 Промокоды", "prm", 1, 0, _ADMIN),
+        _entry("ads", "📢 Реклама", "ads", 1, 1, _ADMIN),
+        _entry("deeplinks", "🔗 Ссылки", "dl", 2, 0, _ADMIN),
+        _entry("broadcasts", "📣 Рассылки", "bc", 2, 1, _ADMIN),
+        _entry("pages", "📄 Страницы", "pgs", 3, 0, _ADMIN),
+        _entry("constructor", "✏️ Конструктор", "ce.home", 3, 1, _ADMIN),
+        _entry("plans", "📦 Тарифы", "plans", 4, 0, _ADMIN),
+        _entry("roles", "🔐 Роли", "roles", 4, 1, _ADMIN),
+        _entry("lte", "🌐 Трафик LTE", "lte", 5, 0, _ADMIN),
+        _entry("ip_guard", "🛡 IP Guard", "ipguard", 5, 1, _ADMIN),
+        _entry("settings", "⚙️ Настройки", SETTINGS_ROOT, 6, 0, _ADMIN),
+        _entry("status", "🩺 Состояние", "status", 6, 1, _ADMIN),
+        _entry("ops", "💾 Бэкапы и обновления", "ops", 7, 0, _OWNER),
         _MENU_BUTTON,
     ),
 )
@@ -287,28 +311,46 @@ _SETTINGS_BUTTON: Final = SeedButton(
     visible_if={"role": {"gte": "admin"}},
 )
 
+#: «🌐 Язык» of home as the older versions stored it (the bot is Russian-only now).
+_LANG_BUTTON: Final = SeedButton(
+    system_key="lang",
+    label={"ru": "🌐 Язык", "en": "🌐 Language"},
+    action={"type": "screen", "target": "lang"},
+    row=5,
+    sort=1,
+)
+
 #: ``(screen code, old seed)`` of system buttons that are no longer seeded. On start a row that still equals
 #: its old seed (label, action, condition) is deleted; a row the owner changed is left alone.
 RETIRED_SYSTEM_BUTTONS: Final[tuple[tuple[str, SeedButton], ...]] = (
     (HOME, PLANS_BUTTON),
     (HOME, _SETTINGS_BUTTON),
+    (HOME, _LANG_BUTTON),
+    (HOME, _PROMO_BUTTON_V2),
 )
 
 _system_screens: tuple[SeedScreen, ...] | None = None
 if TYPE_CHECKING:
     SYSTEM_SCREENS: tuple[SeedScreen, ...]  # provided by the module __getattr__ below
-    #: ``(screen code, old seed, new seed or None)`` of system buttons whose seed changed (the home layout of
-    #: the «Подписка» section): on start a row that still equals its old seed (label, action, condition, row,
-    #: order, colour) takes the new one, or goes away for ``None``; a row the owner changed is left alone.
+    #: ``(screen code, old seed, new seed or None)`` of system buttons whose seed changed (the home layouts of
+    #: the «Подписка» section and of «👤 Профиль», the profile that took the section's place): on start a row
+    #: that still equals its old seed (label, action, condition, row, order, colour) takes the new one, or
+    #: goes away for ``None``; a row the owner changed is left alone.
     RELAYOUT_SYSTEM_BUTTONS: tuple[tuple[str, SeedButton, SeedButton | None], ...]
 
 
 def _build_relayout() -> tuple[tuple[str, SeedButton, SeedButton | None], ...]:
+    current = {b.system_key: b for b in HOME_MODULE_BUTTONS}
+    modules = tuple((HOME, old, current[old.system_key]) for old in (*_HOME_MODULES_V2, *_HOME_MODULES_V3))
     try:
-        from svbg.tg.user.seeds import HOME_RELAYOUT
+        from svbg.tg.user.seeds import HOME_RELAYOUT, PROFILE, PROFILE_RELAYOUT
     except ImportError:  # pragma: no cover - a tree without the user path
-        return ()
-    return tuple((HOME, old, new) for old, new in HOME_RELAYOUT)
+        return modules
+    return (
+        *((HOME, old, new) for old, new in HOME_RELAYOUT),
+        *modules,
+        *((PROFILE, old, new) for old, new in PROFILE_RELAYOUT),
+    )
 
 
 def _build_system_screens() -> tuple[SeedScreen, ...]:

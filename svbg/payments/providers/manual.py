@@ -83,11 +83,6 @@ _T: Final = {
     "card_created": "Счёт создан: {created}",
     "card_note": "Подтверждая, введите сумму из чека. Другая сумма — оплата уйдёт в «Требует внимания».",
 }
-#: English of the messages the **user** sees about a receipt file.
-_T_EN: Final = {
-    "too_big": "The file is too large: up to {mb} MB.",
-    "bad_kind": "Please send the receipt as a photo or a PDF/JPG/PNG file.",
-}
 
 
 class ManualConfig(ConfigModel):
@@ -142,11 +137,12 @@ def receipt_problem(
     mime_type: str | None = None,
     size: int | None = None,
     max_mb: int = 10,
-    lang: str | None = "ru",
+    lang: str | None = None,
 ) -> str | None:
-    """Why a user's message cannot be a receipt (Russian, English for ``lang="en"``), or ``None`` when it can.
-    ``kind`` is ``"photo"`` or ``"document"``."""
-    texts = _T_EN if lang == "en" else _T
+    """Why a user's message cannot be a receipt, or ``None`` when it can. ``kind`` is ``"photo"`` or
+    ``"document"``; ``lang`` is accepted for old callers and ignored."""
+    del lang
+    texts = _T
     if size is not None and size > max_mb * 1024 * 1024:
         return texts["too_big"].format(mb=max_mb)
     if kind == "photo":

@@ -45,7 +45,7 @@ from svbg.core.crypto import CryptoError
 from svbg.core.settings import values
 from svbg.core.settings.bootstrap import file_values
 from svbg.core.settings.envtext import COMPACT_NOTE, HEADER, comment_lines
-from svbg.core.settings.registry import Apply, Registry, SettingDef
+from svbg.core.settings.registry import RETIRED_KEYS, Apply, Registry, SettingDef
 from svbg.core.settings.service import DB_UNAVAILABLE, EXPLICIT_SOURCES, Change, StaleSnapshotError
 
 if TYPE_CHECKING:
@@ -659,7 +659,11 @@ def _has_broken_line(doc: EnvDocument | None, defn: SettingDef) -> bool:
 
 def _rename_aliases(doc: EnvDocument, registry: Registry) -> None:
     """Rewrite lines that use an old key name to the canonical name in place (or drop them if the canonical
-    line exists too)."""
+    line exists too); lines of :data:`RETIRED_KEYS` (keys the bot no longer has) are dropped."""
+    present = {line.key for line in doc.lines if line.kind in ("kv", "invalid")}
+    for key in RETIRED_KEYS & present:
+        if registry.find(key) is None:
+            doc.remove(key)
     present = {line.key for line in doc.lines if line.kind == "kv"}
     for defn in registry.all():
         for alias in defn.aliases:

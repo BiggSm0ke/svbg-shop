@@ -159,24 +159,30 @@ async def test_every_module_registers_with_fakes(start_app: StartApp, module_env
         user = shop.person(5005)
         await user.start()
         labels = [str(b.get("text")) for b in user.buttons()]
-        assert any("Промокод" in x for x in labels), labels
+        assert any("Профиль" in x for x in labels), labels
+        assert not any("Промокод" in x or "Язык" in x for x in labels), labels  # promo codes: in the profile
         assert not any("Пригласить" in x for x in labels), "referral is off by default"
         assert not any("Админка" in x for x in labels)
+        await user.press("Профиль", expect="С нами с")
+        profile = [str(b.get("text")) for b in user.buttons()]
+        assert "🎟 Промокоды" in profile and not any("Пригласить" in x for x in profile), profile
         owner = shop.person(OWNER_ID)
         await owner.start()
         await owner.press("Админка", expect="Чтобы найти человека")
         hub_labels = [str(b.get("text")) for b in owner.buttons()]
         for label in ("Пользователи", "Тарифы", "Оплата", "Маркетинг", "Связь", "Оформление", "Система"):
             assert any(label in x for x in hub_labels), (label, hub_labels)
-        await owner.press("Маркетинг", expect="Реклама считает")
+        await owner.press("Маркетинг", expect="Промокоды, рекламные ссылки")
         await owner.press("Промокоды")
         await owner.start()
         await owner.press("Админка", expect="Чтобы найти человека")
         await owner.press("Статистика", expect="Выручка")
 
-        # promo by the user's button: the code form opens
+        # promo codes live in the profile: the list, then the code form
         await user.start()
-        await user.press("Промокод")
+        await user.press("Профиль", expect="С нами с")
+        await user.press("Промокоды", expect="Вы ещё не вводили промокоды")
+        await user.press("Ввести промокод", expect="Отправьте промокод")
 
 
 async def test_referral_switched_on_without_restart(start_app: StartApp, module_env: AppEnv) -> None:

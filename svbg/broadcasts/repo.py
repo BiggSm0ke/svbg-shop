@@ -130,9 +130,9 @@ class Recipient:
 
 @dataclass(frozen=True, slots=True)
 class AudienceConfig:
-    default_lang: str = "ru"
+    default_lang: str = "ru"  # accepted for old callers; the bot is Russian-only
     channel_id: int | None = None
-    langs: tuple[str, ...] = ("ru", "en")
+    langs: tuple[str, ...] = ("ru",)  # accepted for old callers; ignored
 
 
 class Audience:
@@ -188,15 +188,12 @@ class Audience:
             segment,
             at=at or clock.now(),
             marketing=marketing,
-            default_lang=cfg.default_lang,
             channel_id=cfg.channel_id,
         )
 
     def lang_expr(self) -> Any:
-        cfg = self.config
-        return sa.case(
-            (users.c.language.in_(cfg.langs), users.c.language), else_=sa.literal(cfg.default_lang)
-        )
+        """Every recipient reads Russian (the bot has no other language)."""
+        return sa.literal("ru")
 
     async def count_expr(self, conn: AsyncConnection, segment: Mapping[str, Any]) -> Any:
         """``(SELECT count(*) …)`` as a scalar subquery, to embed into an ``INSERT``/``UPDATE``."""
@@ -299,7 +296,7 @@ class BroadcastRepo:
         """Store a validated segment and its recipient count (one ``UPDATE`` with the count as a subquery);
         ``None`` when the draft is gone or already started."""
         cfg = self.audience.config
-        seg = validate_segment(segment, default_lang=cfg.default_lang, channel_id=cfg.channel_id)
+        seg = validate_segment(segment, channel_id=cfg.channel_id)
         async with self.db.tx() as conn:
             total = await self.audience.count_expr(conn, seg)
             row = (

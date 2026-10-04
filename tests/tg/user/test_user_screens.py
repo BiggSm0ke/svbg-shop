@@ -1,5 +1,5 @@
-"""User screens as content (seeds valid, fallback without content), language, the channel gate, ``/start``
-deep-link stub, the billing messenger, «Я оплатил», cancel."""
+"""User screens as content (seeds valid, fallback without content), Russian only, the channel gate,
+``/start`` deep-link stub, the billing messenger, «Я оплатил», cancel."""
 
 from __future__ import annotations
 
@@ -37,12 +37,13 @@ _GLOBAL = {"balance", "days_left"}
 def test_seed_screens_are_valid_content(seed: Any) -> None:
     assert _CODE_RE.match(seed.code)
     blocks = parse_text_blocks({k: dict(v) for k, v in seed.body.items()})
-    assert set(blocks) == {"ru", "en"}
+    assert set(blocks) == {"ru"} and set(seed.title) == {"ru"}  # the bot speaks Russian only
     allowed = set(seeds.PLACEHOLDERS[seed.code]) | _GLOBAL
     for block in blocks.values():
         used = set(PLACEHOLDER_RE.findall(block.text))
         assert used <= allowed, (seed.code, used - allowed)
     for b in seed.buttons:
+        assert set(b.label) == {"ru"}, (seed.code, b.system_key)
         parse_label(dict(b.label))
         parse_action(dict(b.action))
         if b.visible_if is not None:
@@ -65,17 +66,16 @@ def test_helpers() -> None:
     assert parse_ids("12:30", 2) == [12, 30]
     assert parse_ids("12:-3", 2) is None and parse_ids(None, 1) is None and parse_ids("1:2", 1) is None
     assert plural_days(30) == "1 мес." and plural_days(360) == "1 год" and plural_days(7) == "7 дн."
-    assert plural_days(90, "en") == "3 mo."
+    assert plural_days(90, "en") == "3 мес."  # an old language code is ignored
     assert fmt_left(3 * 86_400 + 5) == "4 дн." and fmt_left(5_400) == "2 ч" and fmt_left(10) == "1 мин"
-    assert t("en", "btn_menu") == "🏠 Menu" and t("xx", "btn_menu") == "🏠 Меню"
-    assert t("en", "status_none") != t("ru", "status_none")
+    assert t("en", "btn_menu") == t("ru", "btn_menu") == t(None, "btn_menu") == "🏠 Меню"
     assert qr_png("https://sub.example/abc").startswith(b"\x89PNG")
     assert len(device_fingerprint("hw")) == 8
     assert (
         device_name({"model": "Pixel", "platform": "Android", "os_version": "14"}, "ru")
         == "Pixel · Android · 14"
     )
-    assert device_name({}, "en") == "Device"
+    assert device_name({}, "en") == "Устройство"
 
 
 @pytest.mark.parametrize(
@@ -104,14 +104,14 @@ def test_deep_link_stub_rejects(payload: str | None) -> None:
 
 
 def test_plain_view_falls_back_to_the_seed() -> None:
-    user = UserCtx(1, lang="en", balance_minor=5_000)
-    view = plain_view(user, None, seeds.HOME, {"status": "S", "name": "Ann"})
-    assert view.text.startswith("👋 Hi, Ann!") and "S" in view.text
+    user = UserCtx(1, lang="en", balance_minor=5_000)  # an old stored language changes nothing
+    view = plain_view(user, None, seeds.HOME, {"status": "S", "name": "Аня"})
+    assert view.text.startswith("👋 Привет, Аня!") and "S" in view.text
     assert view.entities and view.entities[0].type == "bold"
-    labels = [b.text for row in view.keyboard or () for b in row]
-    assert "💰 Balance: {balance}" not in labels and "💰 Balance: 50 ₽" in labels
-    assert "📱 Subscription · {left}" in labels  # {left} is filled by the home route, not by the seed view
-    assert "🛒 Buy" not in labels and "⚙️ Settings" not in labels
+    labels = [b.text.replace("\xa0", " ") for row in view.keyboard or () for b in row]
+    assert "💰 Баланс: 50 ₽" in labels and not any("Подписка" in label for label in labels)
+    assert "👤 Профиль · {left}" in labels  # {left} is filled by the home route, not by the seed view
+    assert not {"🛒 Купить подписку", "⚙️ Настройки", "🌐 Язык", "🎟 Промокод"} & set(labels)
     unknown = plain_view(user, None, "nope", fallback_text="fallback")
     assert unknown.text == "fallback"
 
@@ -121,24 +121,26 @@ async def test_screens_work_without_content_rows(pg_dsn: str) -> None:
         _uid, tg = await env.new_user()
         home = await env.open(tg)
         assert "Подписки пока нет." in home.text and "🎁 Попробовать бесплатно" in home.labels()
-        section = await env.press(tg, "Подписка")
-        assert "Сейчас подписки нет" in section.text
+        section = await env.press(tg, "Профиль")
+        assert section.text.startswith("👤 Профиль") and "Подписки пока нет" in section.text
         periods = await env.press(tg, "Купить")
         assert "Выберите срок" in periods.text
 
 
-async def test_language_switch(pg_dsn: str) -> None:
+async def test_no_language_choice_anywhere(pg_dsn: str) -> None:
+    """The bot is Russian-only: no «Язык» on home, an old stored «en» changes nothing, old language buttons
+    and messages lead home."""
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user()
-        await env.open(tg)
-        langs = await env.press(tg, "Язык")
-        assert "• 🇷🇺 Русский" in langs.labels() and "🇬🇧 English" in langs.labels()
-        home = await env.press(tg, "English")
-        assert home.text.startswith("👋 Hi, Аня!") and "No subscription yet." in home.text
+        await env.db.raw("update users set language = 'en' where id = $1", uid)
+        home = await env.open(tg)
+        assert home.text.startswith("👋 Привет, Аня!") and "Подписки пока нет." in home.text
+        assert not any("Язык" in label or "Language" in label for label in home.labels())
+        old = await env.click(tg, "v1:lang:o")  # a button of an old message
+        assert old.text.startswith("👋 Привет") and "👤 Профиль" in old.labels()
+        stale = await env.click(tg, "v1:lang:set:en")  # the old «English» choice is gone
+        assert "Hi" not in stale.text and "English" not in " ".join(stale.labels())
         assert (await env.rows("select language from users where id = $1", uid))[0]["language"] == "en"
-        assert env.tg.toasts()[-1] == "Language changed"
-        again = await env.click(tg, "v1:home:o")
-        assert "📱 Subscription" in again.labels() and "🌐 Language" in again.labels()
 
 
 async def test_trial_for_channel_members_goes_through_the_gate(pg_dsn: str) -> None:
@@ -212,7 +214,7 @@ async def test_cancel_and_i_paid(pg_dsn: str) -> None:
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user()
         await env.open(tg)
-        await env.press(tg, "Подписка")
+        await env.press(tg, "Профиль")
         await env.press(tg, "Купить подписку")
         await env.press(tg, "1 мес.")
         invoice = await env.press(tg, "СБП")
@@ -285,9 +287,9 @@ def test_notice_buttons_map_to_user_callbacks() -> None:
     assert notice_button(Button("Страница", web_app="http://plain.example")).url == "http://plain.example"
 
 
-async def test_after_onboarding_resumes_after_channel_and_language(pg_dsn: str) -> None:
-    """Decision C9: after «Я подписался» and after a language choice the app's hook (consent page / kept
-    deep-link intent) decides the next screen; staff never get it, and a failing hook falls back."""
+async def test_after_onboarding_resumes_after_channel(pg_dsn: str) -> None:
+    """Decision C9: after «Я подписался» the app's hook (consent page / kept deep-link intent) decides the
+    next screen; a hook that says nothing or fails falls back to home."""
     async with build_user_env(
         pg_dsn, config={"REQUIRED_CHANNEL_ID": CHANNEL, "CHANNEL_REQUIRED_FOR": "all"}
     ) as env:
@@ -296,21 +298,22 @@ async def test_after_onboarding_resumes_after_channel_and_language(pg_dsn: str) 
 
         async def resume(ctx: Any) -> Any:
             calls.append(ctx.user.telegram_id)
-            return Redirect(seeds.LANG) if len(calls) == 1 else None
+            return Redirect(seeds.PROFILE) if len(calls) == 1 else None
 
         env.path.home.after_onboarding = resume
         env.lookup.member = False
         await env.open(tg, seeds.CHANNEL)
         env.lookup.member = True
         resumed = await env.press(tg, "Я подписался")
-        assert calls == [tg] and "Русский" in " ".join(resumed.labels())  # the hook's redirect
-        home = await env.press(tg, "English")
-        assert calls == [tg, tg] and "No subscription yet." in home.text  # hook said None → home
+        assert calls == [tg] and resumed.text.startswith("👤 Профиль")  # the hook's redirect
+        await env.open(tg, seeds.CHANNEL)
+        home = await env.press(tg, "Я подписался")
+        assert calls == [tg, tg] and "Подписки пока нет." in home.text  # hook said None → home
 
         async def broken(_ctx: Any) -> Any:
             raise RuntimeError("boom")
 
         env.path.home.after_onboarding = broken
-        await env.open(tg, seeds.LANG)
-        home = await env.press(tg, "Русский")
+        await env.open(tg, seeds.CHANNEL)
+        home = await env.press(tg, "Я подписался")
         assert "Подписки пока нет." in home.text

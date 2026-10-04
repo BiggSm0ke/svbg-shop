@@ -195,8 +195,9 @@ def test_desired_kwargs_build_a_valid_desired() -> None:
 
 
 def test_titles_and_labels_fall_back() -> None:
-    assert plan().title("en") == "Standard"
+    assert plan().title("en") == "Стандарт"  # Russian-only: an old English name is not used
     assert plan().title("de") == "Стандарт"
+    assert plan(name={"en": "Standard"}).title() == "Standard"  # no Russian name: any name
     assert plan(name={}).title() == "std"
     assert pick_lang({}, "ru") == ""
     loc = Location(SQ_NL, title={"ru": "Нидерланды"}, flag="🇳🇱", panel_name="NL-1")

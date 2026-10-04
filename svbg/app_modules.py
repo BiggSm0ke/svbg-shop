@@ -206,7 +206,7 @@ class PromoPortAdapter:
             "applied": PromoStatus.APPLIED,
             "pending": PromoStatus.PENDING,
         }.get(result.outcome, PromoStatus.REFUSED)
-        return PromoOutcome(status, result.text or None, self.service.localize(result, "en") or None)
+        return PromoOutcome(status, result.text or None)
 
 
 class AdsPortAdapter:
@@ -231,28 +231,14 @@ class AdsPortAdapter:
 
 INVITE_SCREEN: Final = "invite"
 
-_INVITE_T: Final[Mapping[str, Mapping[str, str]]] = {
-    "ru": {
-        "title": "🤝 <b>Пригласите друзей</b>",
-        "link": "🔗 Ваша ссылка:",
-        "share": "📤 Поделиться",
-        "copy": "📋 Скопировать ссылку",
-        "menu": "🏠 Меню",
-        "no_link": "Ссылка появится, когда бот подключится к Telegram.",
-    },
-    "en": {
-        "title": "🤝 <b>Invite friends</b>",
-        "link": "🔗 Your link:",
-        "share": "📤 Share",
-        "copy": "📋 Copy the link",
-        "menu": "🏠 Menu",
-        "no_link": "The link appears once the bot is connected to Telegram.",
-    },
+_INVITE_T: Final[Mapping[str, str]] = {
+    "title": "🤝 <b>Пригласите друзей</b>",
+    "link": "🔗 Ваша ссылка:",
+    "share": "📤 Поделиться",
+    "copy": "📋 Скопировать ссылку",
+    "menu": "🏠 Меню",
+    "no_link": "Ссылка появится, когда бот подключится к Telegram.",
 }
-
-
-def _it(lang: str, key: str) -> str:
-    return (_INVITE_T.get(lang) or _INVITE_T["ru"])[key]
 
 
 class ReferralScreens:
@@ -274,27 +260,23 @@ class ReferralScreens:
     async def screen(self, ctx: ScreenCtx, _arg: Any) -> View:
         from html import escape
 
-        lang = ctx.lang
-        view = await self.service.invite_view(ctx.user.user_id, lang)
-        lines = [_it(lang, "title"), ""]
+        tx = _INVITE_T
+        view = await self.service.invite_view(ctx.user.user_id)
+        lines = [tx["title"], ""]
         rows: list[list[InlineKeyboardButton]] = []
         if view.enabled:
             lines.extend(view.lines)
             if view.link:
-                lines += ["", _it(lang, "link"), f"<code>{escape(view.link)}</code>"]
+                lines += ["", tx["link"], f"<code>{escape(view.link)}</code>"]
                 if view.share_url:
-                    rows.append([InlineKeyboardButton(text=_it(lang, "share"), url=view.share_url)])
+                    rows.append([InlineKeyboardButton(text=tx["share"], url=view.share_url)])
                 if len(view.link) <= 256:
                     rows.append(
-                        [
-                            InlineKeyboardButton(
-                                text=_it(lang, "copy"), copy_text=CopyTextButton(text=view.link)
-                            )
-                        ]
+                        [InlineKeyboardButton(text=tx["copy"], copy_text=CopyTextButton(text=view.link))]
                     )
             else:
-                lines += ["", _it(lang, "no_link")]
+                lines += ["", tx["no_link"]]
         else:
             lines.extend(view.lines)
-        rows.append([nav_button(_it(lang, "menu"), self.home)])
+        rows.append([nav_button(tx["menu"], self.home)])
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)

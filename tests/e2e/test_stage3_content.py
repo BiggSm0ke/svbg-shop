@@ -80,8 +80,8 @@ async def test_owner_edits_home_in_place_others_see_it_and_undo(start_app: Start
         assert shop.tg.calls_for("getCustomEmojiStickers"), "the icon is validated by Telegram"
 
         # 📝 the text (with entities) — the last change, the one «Отменить» takes back
-        await owner.tap("⬅️ К экрану", expect="📝 Текст RU")
-        await owner.tap("📝 Текст RU", expect="Пришлите новый текст")
+        await owner.tap("⬅️ К экрану", expect="📝 Текст")
+        await owner.tap("📝 Текст", expect="Пришлите новый текст")
         entities = [{"type": "bold", "offset": 0, "length": 5}, {"type": "spoiler", "offset": 6, "length": 6}]
         await owner.say("Акция скидки до мая", entities=entities, expect="⚡ Применено")
 
@@ -164,7 +164,7 @@ async def test_content_zip_moves_to_a_clean_install(
         await owner.tap("✏️ Экран", expect="✏️ Экран «")
         await owner.tap("🖼 Медиа", expect="Пришлите фото")
         await owner.send_photo(jpeg_bytes(color=(10, 120, 200)), expect="⚡ Применено")
-        await owner.tap("📝 Текст RU", expect="Пришлите новый текст")
+        await owner.tap("📝 Текст", expect="Пришлите новый текст")
         await owner.say("Перенесённая главная", expect="⚡ Применено")
         exported = await app.content_transfer.export(tmp_path / "content.zip")
         assert Path(exported.path).is_file()

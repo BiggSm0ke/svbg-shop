@@ -27,7 +27,7 @@ def test_fmt_date_is_moscow_time() -> None:
 
 
 def test_group_name_never_leaks_internal_words() -> None:
-    assert notify.group_name({"ru": "LTE", "en": "Mobile"}, "en") == "Mobile"
+    assert notify.group_name({"ru": "LTE", "en": "Mobile"}, "en") == "LTE"  # Russian-only
     assert notify.group_name({"en": "Mobile"}, "ru") == "Mobile"
     assert notify.group_name({}) == "LTE" and notify.group_name(None) == "LTE"
 

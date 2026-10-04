@@ -46,7 +46,7 @@ class UserCtx:
     telegram_id: int | None = None
     role: str = "user"
     perms: frozenset[str] = frozenset()
-    lang: str = "ru"
+    lang: str = "ru"  # the bot is Russian-only: always "ru", whatever the loader passes
     sub_state: str = "none"
     days_left: int | None = None
     balance_minor: int = 0
@@ -66,6 +66,8 @@ class UserCtx:
     _placeholders: dict[str, str] | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        if self.lang != "ru":
+            object.__setattr__(self, "lang", "ru")
         if self.role not in ROLE_RANK:
             raise ValueError(f"unknown role {self.role!r}")
         if self.sub_state not in SUB_STATES:
@@ -99,14 +101,14 @@ class UserCtx:
         if cached is None:
             cached = {
                 "days_left": str(self.days_left) if self.days_left is not None else PLACEHOLDER_NONE,
-                "balance": _format_balance(self.balance_minor, self.currency, self.lang),
+                "balance": _format_balance(self.balance_minor, self.currency),
             }
             object.__setattr__(self, "_placeholders", cached)
         return cached
 
 
-def _format_balance(amount_minor: int, currency: str, lang: str) -> str:
+def _format_balance(amount_minor: int, currency: str) -> str:
     try:
-        return format_money(amount_minor, currency, lang)
+        return format_money(amount_minor, currency)
     except (ValueError, KeyError, TypeError):  # unknown currency/locale must never break a screen
         return f"{amount_minor} {currency}"

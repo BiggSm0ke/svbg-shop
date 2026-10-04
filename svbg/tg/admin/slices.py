@@ -7,7 +7,9 @@ behind «🧰 Ещё», links to related screens. Every key has exactly one *hom
 «⬅️» leads there. A key may be mirrored in another slice (a button to the same card).
 
 Some homes are other screens: the keys of a cash desk live on its card (``apay.c:<slug>``), the admin group
-on ``achat``. A key nobody mapped falls into «Прочее» under «⚙️ Система» (a test keeps it empty).
+on ``achat``. A key nobody mapped falls into «Прочее» under «⚙️ Система» (a test keeps it empty). Keys in
+:data:`HIDDEN` are shown nowhere (the language keys of older versions). A slice tolerates keys the registry
+no longer has: they are skipped.
 """
 
 from __future__ import annotations
@@ -17,14 +19,18 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from svbg.core.settings.registry import RETIRED_KEYS
 from svbg.tg.admin import nav
 
 if TYPE_CHECKING:
     from svbg.core.settings.registry import SettingDef
 
 __all__ = [
+    "HIDDEN",
     "OTHER",
     "PAY_LIST",
+    "PAY_SETTINGS",
+    "RETIRED",
     "SCREEN",
     "SLICES",
     "Link",
@@ -37,8 +43,13 @@ __all__ = [
 ]
 
 SCREEN: Final = "set.v"
+#: Slices that are gone → the screen an old button of theirs opens now.
+RETIRED: Final[Mapping[str, str]] = MappingProxyType({"l.lang": nav.HUB_LOOK})
+#: Keys the admin never shows: the retired language keys (the bot speaks Russian only).
+HIDDEN: Final = RETIRED_KEYS
 OTHER: Final = "sys.other"
 PAY_LIST: Final = "pay.list"
+PAY_SETTINGS: Final = "pay.cfg"  # the settings of all cash desks (one per desk lives on its card)
 _PAY_PREFIX: Final = "pay."
 
 
@@ -89,8 +100,8 @@ SLICES: Final[Mapping[str, Slice]] = MappingProxyType(
                     "REQUIRED_CHANNEL_URL",
                     "CHANNEL_REQUIRED_FOR",
                     "CHANNEL_LEAVE_ACTION",
+                    "CAPTCHA_EMOJIS",
                 ),
-                more=_s("CAPTCHA_EMOJIS"),
                 toggles=True,
             ),
             Slice(
@@ -98,15 +109,14 @@ SLICES: Final[Mapping[str, Slice]] = MappingProxyType(
                 "🎁 Пробный период",
                 "plans",
                 "Сколько дней дать бесплатно и кому. 0 дней выключает пробный период.",
-                _s("TRIAL_DAYS", "TRIAL_AUDIENCE"),
-                more=_s("TRIAL_CARRY_OVER"),
+                _s("TRIAL_DAYS", "TRIAL_AUDIENCE", "TRIAL_CARRY_OVER"),
             ),
             Slice(
                 "p.more",
                 "⚙️ Правила подписки",
                 "plans",
                 "Как часто клиент может менять ссылку и сбрасывать устройства, как округлять цены и когда "
-                "кнопка «📱 Подписка» в меню синеет и краснеет.",
+                "кнопка «👤 Профиль» в меню синеет и краснеет.",
                 _s(
                     "REISSUE_COOLDOWN_MINUTES",
                     "DEVICES_RESET_COOLDOWN_MINUTES",
@@ -129,13 +139,14 @@ SLICES: Final[Mapping[str, Slice]] = MappingProxyType(
                 ),
                 mirrors=_s("CURRENCY"),
             ),
+            Slice(PAY_LIST, "🏦 Кассы", nav.HUB_PAY, "Кассы", screen="apay"),
             Slice(
-                PAY_LIST,
-                "🏦 Кассы",
-                nav.HUB_PAY,
-                "Кассы",
-                more=_s("PAY_CLOCK_SKEW_ALERT_COUNT"),
-                screen="apay",
+                PAY_SETTINGS,
+                "⚙️ Настройки касс",
+                "apay",
+                "Когда предупреждать, что часы кассы и сервера расходятся (оплаты с неверным временем "
+                "бот отклоняет).",
+                _s("PAY_CLOCK_SKEW_ALERT_COUNT"),
             ),
             Slice(
                 "m.ref",
@@ -151,8 +162,8 @@ SLICES: Final[Mapping[str, Slice]] = MappingProxyType(
                     "REFERRAL_PERCENT",
                     "REFERRAL_INVITER_CAP_30D",
                     "REFERRAL_INVITER_CAP_TOTAL",
+                    "ONBOARDING_ASK_REFERRAL_CODE",
                 ),
-                more=_s("ONBOARDING_ASK_REFERRAL_CODE"),
             ),
             Slice(
                 "m.links",
@@ -195,13 +206,6 @@ SLICES: Final[Mapping[str, Slice]] = MappingProxyType(
                 screen="achat",
             ),
             Slice(
-                "l.lang",
-                "🌐 Языки",
-                nav.HUB_LOOK,
-                "На каком языке бот говорит с новыми людьми и из каких языков можно выбрать.",
-                _s("DEFAULT_LANGUAGE", "I18N_AVAILABLE", "I18N_ASK_ON_START"),
-            ),
-            Slice(
                 "l.media",
                 "🖼 Картинки и баннер",
                 nav.HUB_LOOK,
@@ -223,9 +227,8 @@ SLICES: Final[Mapping[str, Slice]] = MappingProxyType(
                 "sys.main",
                 "🧭 Основное",
                 nav.HUB_SYSTEM,
-                "Часовой пояс для отчётов и расписаний, валюта цен и язык по умолчанию.",
+                "Часовой пояс для отчётов и расписаний и валюта цен.",
                 _s("TIMEZONE", "CURRENCY"),
-                mirrors=_s("DEFAULT_LANGUAGE"),
             ),
             Slice(
                 "sys.maint",

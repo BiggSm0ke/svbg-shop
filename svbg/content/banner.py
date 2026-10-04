@@ -10,7 +10,7 @@
   own screen of the constructor gets it — while the banner is :func:`active <banner_active>`: not migrated yet
   or still shown somewhere (the owner who took it off every screen does not get it back on new ones).
   The write side (migration, «убрать со всех» / «вернуть», audit, undo) is :mod:`svbg.content.editing`.
-* **Mode** (:func:`banner_mode`): an attachment when the text fits a caption in every language (≤ 1024 UTF-16
+* **Mode** (:func:`banner_mode`): an attachment when the shown text fits a caption (≤ 1024 UTF-16
   units), else a link preview when ``PUBLIC_URL`` is set, else the screen stays without the banner.
 * The owner's pictures are never touched: the banner only fills ``media_id IS NULL`` and only the banner's
   own ``media_id`` is ever cleared.
@@ -106,8 +106,11 @@ def _text_of(block: Any) -> str:
 
 def banner_mode(body: Mapping[str, Any] | None, preview_ok: bool) -> Literal["attach", "preview"] | None:
     """Media mode for the banner on a screen with ``body`` (``{lang: {text, …} | TextBlock | str}``):
-    ``attach`` when every text fits a caption, else ``preview`` with ``PUBLIC_URL``, else ``None``."""
-    if all(_utf16_len(_text_of(block)) <= CAPTION_LIMIT for block in (body or {}).values()):
+    ``attach`` when the shown (Russian) text fits a caption, else ``preview`` with ``PUBLIC_URL``, else
+    ``None``. An old ``en`` text stays in the database unused and does not count."""
+    body = body or {}
+    shown = body.get("ru") or next(iter(body.values()), None)
+    if _utf16_len(_text_of(shown)) <= CAPTION_LIMIT:
         return "attach"
     return "preview" if preview_ok else None
 

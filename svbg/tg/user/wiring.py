@@ -36,6 +36,7 @@ from svbg.tg.user.home import HomeScreens
 from svbg.tg.user.jobs import DevicesWatch, UserJobs
 from svbg.tg.user.messenger import SERIALIZE_WAIT_S, Caller, Serializer, UserMessenger
 from svbg.tg.user.notices import TelegramNotificationSender
+from svbg.tg.user.profile import ProfileScreens
 from svbg.tg.user.shop import ShopScreens
 from svbg.tg.user.status import StatusReader
 from svbg.tg.user.subscription import SubscriptionScreens
@@ -109,6 +110,7 @@ class UserPath:
         self.shop = ShopScreens(deps, self.status)
         self.account = AccountScreens(deps, self.status)
         self.subscription = SubscriptionScreens(deps, self.status)
+        self.profile = ProfileScreens(deps, self.status)
         self.devices_watch = DevicesWatch(deps.users.activity)
         self.account.watch = self.devices_watch
         self.jobs = UserJobs(
@@ -154,6 +156,7 @@ class UserPath:
         self.shop.register(router)
         self.account.register(router)
         self.subscription.register(router)
+        self.profile.register(router)
         self._registered = True
 
     def aiogram_router(self) -> Router:

@@ -618,7 +618,6 @@ class Fulfiller:
                 orders.c.updated_at,
                 users_wallet.c.telegram_id,
                 users_wallet.c.wallet_minor,
-                users_wallet.c.language,
                 subscriptions.c.link_state,
                 subscriptions.c.subscription_url,
                 subscriptions.c.paid_until,
@@ -662,7 +661,6 @@ class Fulfiller:
         """What the message must show now and the stage that records it; ``None`` — nothing to change.
         ``repairing``: our last edit may have overwritten another job's — re-show what the stage says."""
         cfg = self.config
-        lang = texts.lang_of(row["language"], cfg.default_lang)
         snap = row["snapshot"] or {}
         title = str(snap.get("title") or "")
         final = None
@@ -675,10 +673,9 @@ class Fulfiller:
                 currency=str(row["currency"]),
                 tz=cfg.timezone,
                 devices=int(snap.get("extra_devices") or 0) if snap.get("kind") == "addon_devices" else None,
-                lang=lang,
             )
         stage = row["ui_stage"]
-        connecting = texts.connecting_notice(title=title, lang=lang)
+        connecting = texts.connecting_notice(title=title)
         if stage == "done":
             return (final, "done") if repairing and final is not None else None
         if mode == "final" and final is not None:
@@ -755,14 +752,9 @@ class Fulfiller:
             raise PermanentJobError(f"bad notice payload: {type(e).__name__}") from None
         async with self._db.read() as conn:
             user = (
-                await conn.execute(
-                    sa.select(users_wallet.c.telegram_id, users_wallet.c.language).where(
-                        users_wallet.c.id == user_id
-                    )
-                )
+                await conn.execute(sa.select(users_wallet.c.telegram_id).where(users_wallet.c.id == user_id))
             ).first()
-        lang = texts.lang_of(user.language if user is not None else None, self.config.default_lang)
-        notice = _notice(p, currency, lang)
+        notice = _notice(p, currency)
         await self._deliver(p.get("ui_ref"), user.telegram_id if user is not None else None, notice)
 
     async def attention_job(self, job: Job, ctx: JobContext) -> None:
@@ -781,8 +773,8 @@ class Fulfiller:
         )
 
 
-def _notice(p: Mapping[str, Any], currency: str, lang: str) -> Notice:
-    """A ``billing.notice`` payload as a notice in the user's language (a bad payload goes dead)."""
+def _notice(p: Mapping[str, Any], currency: str) -> Notice:
+    """A ``billing.notice`` payload as a notice (a bad payload goes dead)."""
     kind = p.get("type")
     try:
         if kind == "credited":
@@ -795,7 +787,6 @@ def _notice(p: Mapping[str, Any], currency: str, lang: str) -> Notice:
                 order_id=int(order_id) if order_id is not None else None,
                 title=p.get("title"),
                 price_minor=int(p["price_minor"]) if p.get("price_minor") is not None else None,
-                lang=lang,
             )
         if kind == "refunded":
             return texts.refunded_notice(
@@ -804,10 +795,9 @@ def _notice(p: Mapping[str, Any], currency: str, lang: str) -> Notice:
                 amount_minor=int(p["amount_minor"]),
                 balance_minor=int(p["balance_minor"]),
                 currency=currency,
-                lang=lang,
             )
         if kind == "held":
-            return texts.held_notice(title=str(p.get("title") or ""), lang=lang)
+            return texts.held_notice(title=str(p.get("title") or ""))
     except (KeyError, TypeError, ValueError) as e:
         raise PermanentJobError(f"bad notice payload: {type(e).__name__}") from None
     raise PermanentJobError(f"unknown notice type {kind!r}")

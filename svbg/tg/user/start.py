@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from svbg.tg.ui.router import ScreenRouter
     from svbg.tg.user.directory import UserDirectory
 
-__all__ = ["TEXTS", "TEXTS_EN", "StartHook", "build_start_router"]
+__all__ = ["TEXTS", "StartHook", "build_start_router"]
 
 log = logging.getLogger("svbg.tg.user")
 
@@ -41,16 +41,6 @@ TEXTS: Final = {
     "setting_up": "⏳ Бот настраивается. Загляните чуть позже.",
     "error": "⚠️ Что-то пошло не так. Мы уже знаем об ошибке, попробуйте ещё раз через минуту.",
 }
-TEXTS_EN: Final = {
-    "setting_up": "⏳ The bot is being set up. Please come back a bit later.",
-    "error": "⚠️ Something went wrong. We already know about it, please try again in a minute.",
-}
-
-
-def _text(key: str, lang: str | None) -> str:
-    """``TEXTS[key]`` in ``lang`` (Russian fallback)."""
-    return TEXTS_EN[key] if lang == "en" else TEXTS[key]
-
 
 #: ``(user, chat_id, deep link or None)`` → ``(screen, arg)`` to open instead of the home screen, or ``None``.
 StartHook = Callable[["UserCtx", int, DeepLink | None], Awaitable[tuple[str, Any] | None]]
@@ -84,8 +74,7 @@ def build_start_router(
 
     async def reply_error(_exc: BaseException, message: Message) -> None:
         try:
-            code = (message.from_user.language_code or "") if message.from_user is not None else ""
-            await message.answer(_text("error", "en" if code.lower().startswith("en") else "ru"))
+            await message.answer(TEXTS["error"])
         except TelegramAPIError as e:
             log.warning("could not tell the user about the error: %s", type(e).__name__)
 
@@ -100,7 +89,7 @@ def build_start_router(
             if user is None:
                 return  # a bot or a banned user: stay silent
             if user.role != "owner" and not await users.has_owner():
-                await message.answer(_text("setting_up", user.lang))
+                await message.answer(TEXTS["setting_up"])
                 return
             screen: str = defaults.HOME
             arg: Any = None

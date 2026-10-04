@@ -32,21 +32,11 @@ PROBE_TASK = "content.premium_probe"
 PROBE_INTERVAL_S = 3600.0
 
 
-def _langs(settings: Any) -> tuple[str, ...]:
-    default = "ru"
-    try:
-        current = settings.current() if settings is not None else {}
-        default = str(current["DEFAULT_LANGUAGE"] or "ru")
-    except (KeyError, AttributeError, RuntimeError, TypeError):
-        pass
-    return tuple(dict.fromkeys((default, "ru", "en")))
-
-
 async def setup(router: Any, deps: Any) -> Router:
     """Wire the constructor: editor, media library, premium probe (hourly tick, daily re-check), ``/edit``.
 
     Optional deps: ``media`` (a :class:`MediaLibrary`; else one is built over the router's media directory),
-    ``scheduler``, ``holder`` (downloads, token fingerprint), ``users.owner_ids``, ``settings``.
+    ``scheduler``, ``holder`` (downloads, token fingerprint), ``users.owner_ids``.
     """
     store = deps.content
 
@@ -63,7 +53,6 @@ async def setup(router: Any, deps: Any) -> Router:
     holder = getattr(deps, "holder", None)
     users = getattr(deps, "users", None)
     owner_ids = getattr(users, "owner_ids", None) if users is not None else None
-    settings = getattr(deps, "settings", None)
 
     def bot_info() -> tuple[int | None, str | None]:
         bot = holder.get() if holder is not None else None
@@ -91,7 +80,6 @@ async def setup(router: Any, deps: Any) -> Router:
         premium=premium,
         owner_ids=owner_ids,
         download=bot_downloader(holder) if holder is not None else None,
-        langs=lambda: _langs(settings),
         public_url=public_url,
     )
     screens.install()

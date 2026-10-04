@@ -24,6 +24,7 @@ import asyncio
 import html
 import logging
 import os
+import re
 import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -101,7 +102,29 @@ _COMPONENT_NAMES: Final[Mapping[str, str]] = {
     "database": "PostgreSQL",
     "remnawave": "Remnawave",
     "admin_chat": "Админ-чат",
+    "module:lte": "Модуль «Трафик LTE»",
+    "module:ip_guard": "Модуль «IP Guard»",
 }
+
+
+def _component_name(name: str, registry: Any = None) -> str:
+    """``payments.rollypay`` → «Касса RollyPay» (the title of its settings section), ``module:lte`` →
+    «Модуль lte»; known names in Russian."""
+    if name in _COMPONENT_NAMES:
+        return _COMPONENT_NAMES[name]
+    if name.startswith("payments."):
+        title = ""
+        try:
+            title = str(registry.section_title(name)) if registry is not None else ""
+        except (KeyError, AttributeError):
+            title = ""
+        quoted = re.search(r"«(.+?)»", title)  # «Платёжка «RollyPay» (инстанс rollypay)» → RollyPay
+        return f"Касса {quoted.group(1) if quoted else name.partition('.')[2]}"
+    if name.startswith("module:"):
+        return f"Модуль {name.partition(':')[2]}"
+    return name
+
+
 _ICONS: Final[Mapping[Health, str]] = {
     Health.OK: "✅",
     Health.DEGRADED: "⚠️",
@@ -113,8 +136,8 @@ _SEVERITY_ICON: Final[Mapping[str, str]] = {"error": "🔴", "warn": "🟠", "in
 
 # Owner-facing texts (Russian) in one place.
 _T: Final[dict[str, str]] = {
-    "title": "⚙️ <b>Состояние</b> · SvBG Shop {version}",
-    "uptime": "Работает <b>{uptime}</b> · память <b>{rss}</b>",
+    "uptime": "SvBG Shop {version} · работает <b>{uptime}</b> · память <b>{rss}</b>",
+    "disabled_desks": "⚪ Выключено касс: {n}",
     "components": "<b>Компоненты</b>",
     "no_components": "Компоненты не зарегистрированы.",
     "jobs": "<b>Очередь задач</b>",
@@ -149,14 +172,12 @@ _T: Final[dict[str, str]] = {
     "maintenance": "🛠 Техработы",
     "menu": "🏠 Меню",
     "back": "⬅️ Состояние",
-    "att_title": "⚠️ <b>Требует внимания</b>",
     "att_empty": "Всё в порядке — открытых пунктов нет.",
     "att_more": "…и ещё {n}",
     "att_snoozed": "Скрыто на 24 ч",
     "att_gone": "Этот пункт уже решён",
     "fix": "🛠 {n}. Исправить",
     "snooze": "🔕 {n}. 24 ч",
-    "panel_title": "🖥 <b>Что включено в панели</b>",
     "panel_off": "Панель не подключена — подключите её в мастере настройки.",
     "panel_err": "❌ Не удалось прочитать настройки панели: {error}",
     "panel_all": "✅ Всё, что полезно боту, в панели включено.",
@@ -503,19 +524,30 @@ class StatusScreens:
         ]
 
     def render(self, data: StatusData, *, owner: bool) -> View:
-        lines = [_T["title"].format(version=_esc(self.version, 40))]
+        lines = [nav.header(SCREEN), ""]
         lines.append(
-            _T["uptime"].format(uptime=_human_duration(data.uptime_s or 0.0), rss=_human_bytes(data.rss))
+            _T["uptime"].format(
+                version=_esc(self.version, 40),
+                uptime=_human_duration(data.uptime_s or 0.0),
+                rss=_human_bytes(data.rss),
+            )
         )
         if data.maintenance is not None:
             active, text = data.maintenance
             lines.append(f"{'🛠' if active else '▫️'} {_esc(text)}")
         lines += ["", _T["components"]]
         if data.health:
+            off_desks = 0
+            registry = getattr(self.settings, "registry", None)
             for name, report in data.health.items():
-                label = _COMPONENT_NAMES.get(name, name)
+                if report.status is Health.DISABLED and name.startswith("payments."):
+                    off_desks += 1  # 23 switched-off cash desks are one line, not 23
+                    continue
                 summary = f" — {_esc(report.summary, 200)}" if report.summary else ""
+                label = _component_name(name, registry)
                 lines.append(f"{_ICONS[report.status]} {_esc(label, 60)}{summary}")
+            if off_desks:
+                lines.append(_T["disabled_desks"].format(n=off_desks))
         else:
             lines.append(_T["no_components"])
         if data.jobs is not None:
@@ -565,13 +597,8 @@ class StatusScreens:
         if total:
             keyboard.append([nav_button(_T["att_button"].format(n=total), SCREEN_ATTENTION)])
         keyboard.append([nav_button(_T["panel_button"], SCREEN_PANEL), nav_button(_T["refresh"], SCREEN)])
-        if owner:
-            keyboard.append(
-                [
-                    nav_button(_T["wizard"], WIZARD_SCREEN),
-                    nav_button(_T["maintenance"], SLICE_SCREEN, arg="sys.maint"),
-                ]
-            )
+        if owner:  # the setup wizard is in «🔌 Панель Remnawave»
+            keyboard.append([nav_button(_T["maintenance"], SLICE_SCREEN, arg="sys.maint")])
         keyboard.append(nav.back_row(SCREEN))
         return View(text=text, parse_mode="HTML", keyboard=keyboard)
 
@@ -584,7 +611,7 @@ class StatusScreens:
     async def _attention_view(self, ctx: ScreenCtx, *, toast: str | None = None) -> View:
         owner = ctx.user.role == "owner"
         items = await self.attention.open_items(limit=ATTENTION_LIMIT + 1)
-        lines = [_T["att_title"], ""]
+        lines = [nav.header(SCREEN_ATTENTION), ""]
         keyboard: list[list[InlineKeyboardButton]] = []
         if not items:
             lines.append(_T["att_empty"])
@@ -669,7 +696,7 @@ class StatusScreens:
         if ctx.user.role == "owner":
             keyboard.append([nav_button(_T["wizard"], WIZARD_SCREEN, arg="wh")])
         keyboard.append(nav.back_row(SCREEN_PANEL))
-        return View(text=f"{_T['panel_title']}\n\n{body}", parse_mode="HTML", keyboard=keyboard)
+        return View(text=f"{nav.header(SCREEN_PANEL)}\n\n{body}", parse_mode="HTML", keyboard=keyboard)
 
 
 # ================================================================================ entry point

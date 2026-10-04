@@ -51,7 +51,6 @@ if TYPE_CHECKING:
 __all__ = [
     "JOB_KIND",
     "KINDS",
-    "T_EN",
     "NotifyConfig",
     "NotifySender",
     "fmt_date",
@@ -90,37 +89,23 @@ T: Final[Mapping[str, str]] = {
     "btn_renew": "🔄 Продлить",
     "btn_connect": "🔗 Подключиться",
 }
-#: English of :data:`T` (same keys and placeholders).
-T_EN: Final[Mapping[str, str]] = {
-    "warn": "⚠️ <b>{group} traffic</b>: {left} GB of {limit} GB left.\n"
-    "When it runs out, {group} servers will be unavailable {until}. Other servers will keep working.",
-    "exhausted": "🚫 <b>{group} traffic is used up</b>.\n{group} servers are unavailable {until}. "
-    "Other servers still work: pick another one in the app.",
-    "reset": "✅ <b>{group} traffic renewed</b>: {limit} GB available until {reset}.",
-    "until_date": "until {date}",
-    "until_renew": "until the subscription is renewed",
-    "btn_topup": "⚡ Buy more LTE traffic",
-    "btn_renew": "🔄 Renew",
-    "btn_connect": "🔗 Connect",
-}
 
 
-def user_texts(lang: str | None) -> Mapping[str, str]:
-    """:data:`T` in ``lang`` (Russian fallback)."""
-    return T_EN if lang == "en" else T
+def user_texts(_lang: str | None = None) -> Mapping[str, str]:
+    """:data:`T` (the argument, an old language, is ignored: the bot is Russian-only)."""
+    return T
 
 
 # ------------------------------------------------------------------------------------------- formats
 
 
-def fmt_gb(value: int | None, gb_bytes: int = 10**9, lang: str | None = "ru") -> str:
-    """``12,4`` (one decimal, Russian comma — a point in English, whole numbers without ``,0``)."""
+def fmt_gb(value: int | None, gb_bytes: int = 10**9, _lang: str | None = None) -> str:
+    """``12,4`` (one decimal, Russian comma, whole numbers without ``,0``)."""
     if value is None:
         return "∞"
     gb = max(0, int(value)) / max(1, int(gb_bytes))
-    sep = "." if lang == "en" else ","
-    text = f"{gb:.1f}".replace(".", sep)
-    return text[:-2] if text.endswith(f"{sep}0") else text
+    text = f"{gb:.1f}".replace(".", ",")
+    return text[:-2] if text.endswith(",0") else text
 
 
 def fmt_date(moment: datetime | None) -> str:
@@ -130,10 +115,10 @@ def fmt_date(moment: datetime | None) -> str:
     return moment.astimezone(MSK).strftime("%d.%m")
 
 
-def group_name(name: Any, lang: str = "ru") -> str:
+def group_name(name: Any, _lang: str | None = None) -> str:
     """The user-facing group name (``{"ru": "LTE"}``); never the words «белые списки» / WLQ."""
     if isinstance(name, Mapping):
-        value = name.get(lang) or name.get("ru") or next((v for v in name.values() if v), None)
+        value = name.get("ru") or next((v for v in name.values() if v), None)
         if isinstance(value, str) and value.strip():
             return value.strip()[:40]
     return "LTE"
@@ -331,14 +316,12 @@ class NotifySender:
     async def render(self, row: Mapping[str, Any]) -> tuple[str, InlineKeyboardMarkup]:
         from aiogram.types import InlineKeyboardMarkup
 
-        from svbg.billing.texts import lang_of
         from svbg.tg.ui.renderer import nav_button
 
-        lang = lang_of(row.get("language"))
-        tx = user_texts(lang)
+        tx = T
         payload = row["payload"] or {}
         gb = self._gb()
-        group = group_name(row["group_name"], lang)
+        group = group_name(row["group_name"])
         limit = payload.get("limit")
         used = int(payload.get("used") or 0)
         deferred = row["period_state"] == "deferred"
@@ -357,14 +340,12 @@ class NotifySender:
                 topup = False
         if kind == NOTIFY_WARN:
             left = max(0, int(limit or 0) - used) if limit is not None else 0
-            text = tx["warn"].format(
-                group=group, left=fmt_gb(left, gb, lang), limit=fmt_gb(limit, gb, lang), until=until
-            )
+            text = tx["warn"].format(group=group, left=fmt_gb(left, gb), limit=fmt_gb(limit, gb), until=until)
         elif kind == NOTIFY_EXHAUSTED:
             text = tx["exhausted"].format(group=group, until=until)
         else:
             text = tx["reset"].format(
-                group=group, limit=fmt_gb(limit, gb, lang), reset=fmt_date(row["planned_end_at"])
+                group=group, limit=fmt_gb(limit, gb), reset=fmt_date(row["planned_end_at"])
             )
         if topup:
             rows.append([nav_button(tx["btn_topup"], "lte_topup", style="success")])
@@ -385,7 +366,6 @@ class NotifySender:
                 n.payload,
                 n.subscription_id,
                 users.c.telegram_id,
-                users.c.language,
                 users.c.banned_at,
                 users.c.bot_blocked_at,
                 subscriptions.c.hold_kind,

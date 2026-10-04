@@ -4,7 +4,7 @@ Every user screen is a *content* screen with a code: the owner may change its te
 recolour the system ones (``system_key``). Screens are rendered by the code routes of :mod:`svbg.tg.user`
 with screen-specific ``{placeholders}`` (see ``PLACEHOLDERS``); when the content store has no such screen yet
 (a fresh database before seeding, a deleted row) the very same seed below is the fallback, so the bot never
-shows an empty message.
+shows an empty message. The bot speaks Russian only: every text is under ``ru``.
 
 ``USER_SCREENS`` is meant to be appended to :data:`svbg.content.defaults.SYSTEM_SCREENS` by integration (the
 ``home`` seed replaces the stage-0 one). Button colours are ``style`` (``primary`` / ``success`` /
@@ -32,12 +32,17 @@ __all__ = [
     "DEVICES_RESET",
     "HOME",
     "HOME_RELAYOUT",
-    "LANG",
+    "HOME_V2",
+    "HOME_V3",
     "NOTICE_PREFIX",
     "PAY_DETAILS",
     "PAY_INVOICE",
     "PAY_WAIT",
     "PLACEHOLDERS",
+    "PROFILE",
+    "PROFILE_RELAYOUT",
+    "PROMOS",
+    "PROMO_ENTRY",
     "REISSUE",
     "REISSUE_DONE",
     "REISSUE_WAIT",
@@ -72,12 +77,19 @@ REISSUE_WAIT: Final = "reissue_wait"
 TRIAL_STARTED: Final = "trial_start"
 TRIAL_DONE: Final = "trial_done"
 CHANNEL: Final = "chan"
-LANG: Final = "lang"
-#: The «Подписка» section: status, plan, time left, traffic, devices (``sub``) or «нет подписки»
-#: (``sub_none``).
+#: The old «Подписка» section (``sub``, ``sub_none`` without a subscription): «👤 Профиль» took its place.
+#: The codes stay as aliases of the profile for old buttons, deep links and notifications.
 SUB: Final = "sub"
 SUB_NONE: Final = "sub_none"
-#: Placeholder of the home «📱 Подписка» button: the time left («12 дн.», «2 дн. 5 ч», «закончилась»); empty
+#: «👤 Профиль»: who the user is, the balance, the subscription (plan, status, time left, devices,
+#: traffic, servers) and the buttons to manage it.
+PROFILE: Final = "profile"
+#: «🎟 Промокоды» of the profile: the codes the user entered, a waiting discount, «✏️ Ввести промокод»
+#: (rendered by :mod:`svbg.promo.user`, which owns the promo engine).
+PROMOS: Final = "promos"
+#: The code entry form of :mod:`svbg.promo.user` (also ``system:promo`` and the promo deep links).
+PROMO_ENTRY: Final = "promo"
+#: Placeholder of the home «👤 Профиль» button: the time left («12 дн.», «2 дн. 5 ч», «закончилась»); empty
 #: without a subscription, and then the separator in front of it goes too. The colour follows the status.
 SUB_LEFT: Final = "left"
 #: The entry captcha (``svbg.tg.user.captcha``): the emoji buttons are added by code.
@@ -97,11 +109,32 @@ def _b(text: str) -> dict[str, Any]:
     return {"text": text, "entities": [{"type": "bold", "offset": 0, "length": _utf16(first)}]}
 
 
-def _body(ru: str, en: str) -> dict[str, dict[str, Any]]:
-    return {"ru": _b(ru), "en": _b(en)}
+def _body(text: str) -> dict[str, dict[str, Any]]:
+    return {"ru": _b(text)}
 
 
 def _btn(
+    key: str,
+    label: str,
+    action: Mapping[str, Any],
+    *,
+    row: int = 0,
+    sort: int = 0,
+    style: str | None = None,
+    visible_if: Mapping[str, Any] | None = None,
+) -> SeedButton:
+    return SeedButton(
+        system_key=key,
+        label={"ru": label},
+        action=dict(action),
+        row=row,
+        sort=sort,
+        style=style,
+        visible_if=visible_if,
+    )
+
+
+def _was(
     key: str,
     ru: str,
     en: str,
@@ -112,6 +145,8 @@ def _btn(
     style: str | None = None,
     visible_if: Mapping[str, Any] | None = None,
 ) -> SeedButton:
+    """A button exactly as an older version stored it (with its old English label). Never seeded or shown:
+    only compared with what an install has, to tell an untouched row from one the owner edited."""
     return SeedButton(
         system_key=key,
         label={"ru": ru, "en": en},
@@ -127,40 +162,106 @@ def _to(target: str) -> dict[str, str]:
     return {"type": "screen", "target": target}
 
 
-_MENU: Final = _btn("home", "🏠 Меню", "🏠 Menu", _to(HOME), row=9)
+_MENU: Final = _btn("home", "🏠 Меню", _to(HOME), row=9)
 _NO_PAID: Final = {"sub": ["none", "trial"]}
 _PAID: Final = {"sub": ["active", "expired", "frozen"]}
 _LIVE: Final = {"sub": ["trial", "active"]}
 _TRIAL: Final = {"type": "system", "name": "trial"}
+_TRIAL_SHOWN: Final = {"flag:trial": True}
 
-#: The home buttons as they were seeded before the «Подписка» section. A row that still equals its old seed
-#: (the owner never touched it) takes the new layout on start
-#: (``svbg.content.editing.relayout_system_buttons``); «Купить», «Продлить» and «Устройства» leave home,
-#: they live in «Подписка» now.
+#: The home buttons as they were seeded before the «Подписка» section (v1).
 _HOME_V1: Final = (
-    _btn("buy", "🛒 Купить подписку", "🛒 Buy", _to(BUY), style="success", visible_if=_NO_PAID),
-    _btn("renew", "🔄 Продлить", "🔄 Renew", _to(BUY), style="success", visible_if=_PAID),
-    _btn("connect", "🔗 Подключиться", "🔗 Connect", _to(CONNECT), row=1, style="primary", visible_if=_LIVE),
-    _btn(
+    _was("buy", "🛒 Купить подписку", "🛒 Buy", _to(BUY), style="success", visible_if=_NO_PAID),
+    _was("renew", "🔄 Продлить", "🔄 Renew", _to(BUY), style="success", visible_if=_PAID),
+    _was("connect", "🔗 Подключиться", "🔗 Connect", _to(CONNECT), row=1, style="primary", visible_if=_LIVE),
+    _was(
         "trial",
         "🎁 Попробовать бесплатно",
         "🎁 Free trial",
         _TRIAL,
         row=1,
         style="success",
-        visible_if={"flag:trial": True},
+        visible_if=_TRIAL_SHOWN,
     ),
-    _btn("devices", "📱 Устройства", "📱 Devices", _to(DEVICES), row=2, visible_if=_LIVE),
-    _btn("balance", "💰 Баланс", "💰 Balance", _to(BALANCE), row=2, sort=1),
-    _btn("lang", "🌐 Язык", "🌐 Language", _to(LANG), row=3),
+    _was("devices", "📱 Устройства", "📱 Devices", _to(DEVICES), row=2, visible_if=_LIVE),
+    _was("balance", "💰 Баланс", "💰 Balance", _to(BALANCE), row=2, sort=1),
+)
+
+#: The home buttons as they were seeded with the «Подписка» section (v2, before «👤 Профиль»).
+HOME_V2: Final = (
+    _was("connect", "🔗 Подключиться", "🔗 Connect", _to(CONNECT), style="primary", visible_if=_LIVE),
+    _was("balance", "💰 Баланс: {balance}", "💰 Balance: {balance}", _to(BALANCE), row=1),
+    _was(
+        "trial",
+        "🎁 Попробовать бесплатно",
+        "🎁 Free trial",
+        _TRIAL,
+        row=2,
+        style="success",
+        visible_if=_TRIAL_SHOWN,
+    ),
+    _was("sub", "📱 Подписка · {left}", "📱 Subscription · {left}", _to(SUB), row=3),
+)
+
+
+def _old(
+    key: str,
+    label: str,
+    action: Mapping[str, Any],
+    *,
+    row: int = 0,
+    sort: int = 0,
+    style: str | None = None,
+    visible_if: Mapping[str, Any] | None = None,
+) -> SeedButton:
+    """A Russian-only button as an older version stored it: compared with an install, never seeded."""
+    return _btn(key, label, action, row=row, sort=sort, style=style, visible_if=visible_if)
+
+
+#: The home buttons with both «📱 Подписка» and «👤 Профиль» (v3, Russian-only). «Подключиться» and the trial
+#: did not move since and are not listed.
+HOME_V3: Final = (
+    _old("sub", "📱 Подписка · {left}", _to(SUB), row=1),
+    _old("profile", "👤 Профиль", _to(PROFILE), row=2),
+    _old("balance", "💰 Баланс: {balance}", _to(BALANCE), row=2, sort=1),
+)
+
+#: The profile buttons of v3 that changed: «📱 Подписка» leaves (the profile is the section now), the rest
+#: moves to make room for the subscription buttons. «Продлить» and «Назад» stayed where they were.
+_PROFILE_V3: Final = (
+    _old("sub", "📱 Подписка", _to(SUB)),
+    _old("connect", "🔗 Подключиться", _to(CONNECT), sort=1, style="primary", visible_if=_LIVE),
+    _old("topup", "💳 Пополнить", _to(BALANCE), row=1, sort=1),
+    _old("promos", "🎟 Промокоды", _to(PROMOS), row=2, visible_if={"flag:promo": True}),
+    _old(
+        "referral",
+        "🤝 Пригласить друзей",
+        {"type": "system", "name": "referral"},
+        row=2,
+        sort=1,
+        visible_if={"flag:referral": True},
+    ),
 )
 
 #: Placeholders each screen understands (besides ``{balance}`` and ``{days_left}`` available everywhere).
 PLACEHOLDERS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         HOME: ("status", "plan", "until", "devices", "name"),
-        SUB: ("status", "plan", "left", "until", "traffic", "devices", "servers"),
-        SUB_NONE: ("trial",),
+        PROFILE: (
+            "name",
+            "username",
+            "id",
+            "since",
+            "sub",
+            "status",
+            "plan",
+            "left",
+            "until",
+            "devices",
+            "traffic",
+            "servers",
+        ),
+        PROMOS: ("list", "pending"),
         BUY: (),
         BUY_PLAN: ("plan", "devices", "traffic"),
         CHECKOUT: ("plan", "period", "until", "price", "pay_line"),
@@ -179,7 +280,6 @@ PLACEHOLDERS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
         TRIAL_STARTED: ("days",),
         TRIAL_DONE: ("until",),
         CHANNEL: (),
-        LANG: (),
         CAPTCHA: ("emoji",),
         "notify_expiring": ("until", "left", "plan"),
         "notify_expired": ("until", "plan"),
@@ -195,46 +295,32 @@ PLACEHOLDERS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
 USER_SCREENS: Final[tuple[SeedScreen, ...]] = (
     SeedScreen(
         code=HOME,
-        title={"ru": "Главная", "en": "Home"},
-        body=_body(
-            "👋 Привет, {name}!\n\n{status}\nБаланс: {balance}",
-            "👋 Hi, {name}!\n\n{status}\nBalance: {balance}",
-        ),
-        # Rows as in the Bedolaga main menu: connect, balance, trial, the subscription, then promo + invite
-        # (row 4) and information + language (row 5; the first ones are module buttons of
-        # svbg.content.defaults), support (drawn by the code) and the staff «🛠 Админка» (row 9).
+        title={"ru": "Главная"},
+        body=_body("👋 Привет, {name}!\n\n{status}\nБаланс: {balance}"),
+        # Rows: connect, the profile (with the time left and the colour), balance + invite (the module button
+        # of svbg.content.defaults), the trial, information + support (support is drawn by the code) and the
+        # staff «🛠 Админка» (row 9). The profile is also the subscription section; promo codes live there.
         buttons=(
-            _btn("connect", "🔗 Подключиться", "🔗 Connect", _to(CONNECT), style="primary", visible_if=_LIVE),
-            _btn("balance", "💰 Баланс: {balance}", "💰 Balance: {balance}", _to(BALANCE), row=1),
+            _btn("connect", "🔗 Подключиться", _to(CONNECT), style="primary", visible_if=_LIVE),
+            _btn("profile", "👤 Профиль · {left}", _to(PROFILE), row=1),
+            _btn("balance", "💰 Баланс: {balance}", _to(BALANCE), row=2),
             _btn(
-                "trial",
-                "🎁 Попробовать бесплатно",
-                "🎁 Free trial",
-                _TRIAL,
-                row=2,
-                style="success",
-                visible_if={"flag:trial": True},
+                "trial", "🎁 Попробовать бесплатно", _TRIAL, row=3, style="success", visible_if=_TRIAL_SHOWN
             ),
-            _btn("sub", "📱 Подписка · {left}", "📱 Subscription · {left}", _to(SUB), row=3),
-            _btn("lang", "🌐 Язык", "🌐 Language", _to(LANG), row=5, sort=1),
             # staff: one «🛠 Админка» (svbg.content.defaults.ADMIN_BUTTON); the old «⚙️ Настройки» is retired
         ),
     ),
     SeedScreen(
-        code=SUB,
-        title={"ru": "Подписка", "en": "Subscription"},
-        body=_body(
-            "📱 Подписка\n\nСтатус: {status}\nТариф: {plan}\nОсталось: {left}\nДействует до: {until}\n"
-            "Трафик: {traffic}\nУстройства: {devices}{servers}",
-            "📱 Subscription\n\nStatus: {status}\nPlan: {plan}\nTime left: {left}\nValid until: {until}\n"
-            "Traffic: {traffic}\nDevices: {devices}{servers}",
-        ),
+        code=PROFILE,
+        title={"ru": "Профиль"},
+        body=_body("👤 Профиль\n\n{name}\nID: {id}\nС нами с {since}\nБаланс: {balance}\n\n{sub}"),
+        # With a subscription: connect, renew + change plan, devices + top up; without one: buy, top up and
+        # the trial. Promo codes and invites when their modules are on.
         buttons=(
-            _btn("connect", "🔗 Подключиться", "🔗 Connect", _to(CONNECT), style="primary", visible_if=_LIVE),
+            _btn("connect", "🔗 Подключиться", _to(CONNECT), style="primary", visible_if=_LIVE),
             _btn(
                 "renew",
                 "🔄 Продлить",
-                "🔄 Renew",
                 {"type": "system", "name": "renew"},
                 row=1,
                 style="success",
@@ -243,132 +329,116 @@ USER_SCREENS: Final[tuple[SeedScreen, ...]] = (
             _btn(
                 "change",
                 "📦 Сменить тариф",
-                "📦 Change plan",
                 _to(BUY),
                 row=1,
                 sort=1,
                 visible_if={"sub": ["active", "expired"]},
             ),
+            _btn("buy", "🛒 Купить подписку", _to(BUY), row=1, style="success", visible_if=_NO_PAID),
+            _btn("devices", "📱 Устройства", _to(DEVICES), row=2, visible_if=_LIVE),
+            _btn("topup", "💳 Пополнить", _to(BALANCE), row=2, sort=1),
             _btn(
-                "buy", "🛒 Купить подписку", "🛒 Buy", _to(BUY), row=1, style="success", visible_if=_NO_PAID
+                "trial", "🎁 Попробовать бесплатно", _TRIAL, row=3, style="success", visible_if=_TRIAL_SHOWN
             ),
-            _btn("devices", "📱 Устройства", "📱 Devices", _to(DEVICES), row=2, visible_if=_LIVE),
-            _MENU,
+            _btn("promos", "🎟 Промокоды", _to(PROMOS), row=4, visible_if={"flag:promo": True}),
+            _btn(
+                "referral",
+                "🤝 Пригласить друзей",
+                {"type": "system", "name": "referral"},
+                row=4,
+                sort=1,
+                visible_if={"flag:referral": True},
+            ),
+            _btn("back", "◀️ Назад", _to(HOME), row=9),
         ),
     ),
     SeedScreen(
-        code=SUB_NONE,
-        title={"ru": "Подписка (нет)", "en": "Subscription (none)"},
-        body=_body(
-            "📱 Подписка\n\nСейчас подписки нет. Нажмите «Купить подписку» и выберите тариф и срок.{trial}",
-            "📱 Subscription\n\nNo subscription right now. Tap «Buy» and pick a plan and a period.{trial}",
-        ),
+        code=PROMOS,
+        title={"ru": "Промокоды"},
+        body=_body("🎟 Промокоды\n\n{pending}{list}"),
         buttons=(
-            _btn("buy", "🛒 Купить подписку", "🛒 Buy", _to(BUY), style="success"),
-            _btn(
-                "trial",
-                "🎁 Попробовать бесплатно",
-                "🎁 Free trial",
-                _TRIAL,
-                row=1,
-                visible_if={"flag:trial": True},
-            ),
-            _MENU,
+            _btn("enter", "✏️ Ввести промокод", _to(PROMO_ENTRY), style="primary"),
+            _btn("back", "◀️ Назад", _to(PROFILE), row=9),
         ),
     ),
     SeedScreen(
         code=BUY,
-        title={"ru": "Покупка", "en": "Buy"},
-        body=_body("🛒 Выберите тариф", "🛒 Choose a plan"),
-        buttons=(_btn("back", "◀️ Назад", "◀️ Back", _to(SUB), row=8), _MENU),
+        title={"ru": "Покупка"},
+        body=_body("🛒 Выберите тариф"),
+        buttons=(_btn("back", "◀️ Назад", _to(PROFILE), row=8), _MENU),
     ),
     SeedScreen(
         code=BUY_PLAN,
-        title={"ru": "Срок", "en": "Period"},
+        title={"ru": "Срок"},
         body=_body(
             "📦 {plan}\nУстройств: {devices} · Трафик: {traffic}\n\nВыберите срок. Чем дольше, тем выгоднее:",
-            "📦 {plan}\nDevices: {devices} · Traffic: {traffic}\n\nChoose a period. The longer, the cheaper:",
         ),
     ),
     SeedScreen(
         code=CHECKOUT,
-        title={"ru": "Оформление", "en": "Checkout"},
+        title={"ru": "Оформление"},
         body=_body(
             "🧾 Проверьте заказ\n\nТариф: {plan}\nСрок: {period}\nДействует до: {until}\n"
             "Цена: {price}\nНа балансе: {balance}\n\n{pay_line}",
-            "🧾 Check your order\n\nPlan: {plan}\nPeriod: {period}\nValid until: {until}\n"
-            "Price: {price}\nBalance: {balance}\n\n{pay_line}",
         ),
     ),
     SeedScreen(
         code=PAY_WAIT,
-        title={"ru": "Оформляю", "en": "Processing"},
+        title={"ru": "Оформляю"},
         body=_body(
             "⏳ Оформляю подписку…\n\nЭто займёт несколько секунд, сообщение обновится само.",
-            "⏳ Activating your subscription…\n\n"
-            "This takes a few seconds. The message will update on its own.",
         ),
     ),
     SeedScreen(
         code=SHORTFALL,
-        title={"ru": "Не хватает", "en": "Not enough"},
+        title={"ru": "Не хватает"},
         body=_body(
             "💳 Не хватает {missing}\n\nЦена: {price}, на балансе: {balance}.\n"
             "Пополните баланс, и подписка оформится сразу после оплаты.{surplus_note}",
-            "💳 {missing} short\n\nPrice: {price}, balance: {balance}.\n"
-            "Top up and the purchase goes through as soon as the payment arrives.{surplus_note}",
         ),
         buttons=(_MENU,),
     ),
     SeedScreen(
         code=PAY_INVOICE,
-        title={"ru": "Счёт", "en": "Invoice"},
+        title={"ru": "Счёт"},
         body=_body(
             "🧾 Счёт на {amount} готов\n\nОплатите по кнопке ниже. {after}",
-            "🧾 Invoice for {amount} is ready\n\nPay with the button below. {after}",
         ),
     ),
     SeedScreen(
         code=PAY_DETAILS,
-        title={"ru": "Перевод", "en": "Transfer"},
+        title={"ru": "Перевод"},
         body=_body(
             "🏦 Перевод на {amount}\n\n{details}\n\nПосле перевода пришлите сюда фото или PDF чека.",
-            "🏦 Transfer of {amount}\n\n{details}\n\n"
-            "After the transfer, send a photo or PDF of the receipt here.",
         ),
     ),
     SeedScreen(
         code=BALANCE,
-        title={"ru": "Баланс", "en": "Balance"},
+        title={"ru": "Баланс"},
         body=_body(
             "💰 Баланс: {balance}\n\nС баланса оплачивается подписка. Выберите сумму пополнения:",
-            "💰 Balance: {balance}\n\nThe subscription is paid from the balance. Choose an amount:",
         ),
         buttons=(_MENU,),
     ),
     SeedScreen(
         code=TOPUP,
-        title={"ru": "Пополнение", "en": "Top-up"},
+        title={"ru": "Пополнение"},
         body=_body(
             "💳 Пополнение на {amount}\n\nВыберите способ оплаты:{surplus_note}",
-            "💳 Top-up of {amount}\n\nChoose a payment method:{surplus_note}",
         ),
     ),
     SeedScreen(
         code=CONNECT,
-        title={"ru": "Подключение", "en": "Connect"},
+        title={"ru": "Подключение"},
         body=_body(
             "🔗 Подключение\n\n{state}\n\nОткройте страницу подключения: там приложение и инструкция "
             "для вашего устройства. Ссылку можно скопировать или показать QR-кодом.",
-            "🔗 Connect\n\n{state}\n\nOpen the connection page: it has the app and instructions for your "
-            "device. You can also copy the link or show it as a QR code.",
         ),
         buttons=(
-            _btn("devices", "📱 Устройства", "📱 Devices", _to(DEVICES), row=3, visible_if=_LIVE),
+            _btn("devices", "📱 Устройства", _to(DEVICES), row=3, visible_if=_LIVE),
             _btn(
                 "reissue",
                 "♻️ Перевыпустить ссылку",
-                "♻️ New link",
                 _to(REISSUE),
                 row=3,
                 sort=1,
@@ -379,157 +449,129 @@ USER_SCREENS: Final[tuple[SeedScreen, ...]] = (
     ),
     SeedScreen(
         code=DEVICES,
-        title={"ru": "Устройства", "en": "Devices"},
+        title={"ru": "Устройства"},
         body=_body(
             "📱 Устройства: {count} из {limit}\n\n{list}{note}",
-            "📱 Devices: {count} of {limit}\n\n{list}{note}",
         ),
         buttons=(_MENU,),
     ),
     SeedScreen(
         code=DEVICES_RESET,
-        title={"ru": "Сброс устройств", "en": "Reset devices"},
+        title={"ru": "Сброс устройств"},
         body=_body(
             "🧹 Отвязать все устройства ({count})?\n\n"
             "На каждом устройстве подписку придётся добавить заново.",
-            "🧹 Unlink all devices ({count})?\n\nYou will have to add the subscription on each device again.",
         ),
     ),
     SeedScreen(
         code=REISSUE,
-        title={"ru": "Перевыпуск ссылки", "en": "New link"},
+        title={"ru": "Перевыпуск ссылки"},
         body=_body(
             "♻️ Перевыпустить ссылку?\n\nСтарая ссылка перестанет работать на всех устройствах, "
             "подписку придётся добавить заново. Делайте это, если ссылка попала к чужим.",
-            "♻️ Issue a new link?\n\nThe old link stops working on every device, so you will have to add the "
-            "subscription again. Do this if the link got into the wrong hands.",
         ),
     ),
     SeedScreen(
         code=REISSUE_DONE,
-        title={"ru": "Ссылка перевыпущена", "en": "Link renewed"},
+        title={"ru": "Ссылка перевыпущена"},
         body=_body(
             "✅ Новая ссылка готова\n\nДобавьте подписку на устройства заново, кнопка ниже.",
-            "✅ The new link is ready\n\nAdd the subscription to your devices again with the button below.",
         ),
     ),
     SeedScreen(
         code=REISSUE_WAIT,
-        title={"ru": "Перевыпускаем ссылку", "en": "Renewing the link"},
+        title={"ru": "Перевыпускаем ссылку"},
         body=_body(
             "♻️ Перевыпускаем ссылку…\n\nЭто займёт несколько секунд, сообщение обновится само.",
-            "♻️ Renewing your link…\n\nThis takes a few seconds. The message will update on its own.",
         ),
     ),
     SeedScreen(
         code=TRIAL_STARTED,
-        title={"ru": "Пробный период", "en": "Trial"},
+        title={"ru": "Пробный период"},
         body=_body(
             "🎁 Пробный период на {days} дн. активирован!\n\nПодключаем, это займёт несколько секунд. "
             "Сообщение обновится само.",
-            "🎁 Your {days}-day trial is on!\n\nSetting it up, this takes a few seconds. "
-            "The message will update on its own.",
         ),
     ),
     SeedScreen(
         code=TRIAL_DONE,
-        title={"ru": "Пробный период готов", "en": "Trial ready"},
+        title={"ru": "Пробный период готов"},
         body=_body(
             "✅ Готово! Пробный период до {until}\n\nНажмите «Подключиться» и следуйте инструкции.",
-            "✅ Done! Trial until {until}\n\nTap «Connect» and follow the instructions.",
         ),
     ),
     SeedScreen(
         code=CHANNEL,
-        title={"ru": "Канал", "en": "Channel"},
+        title={"ru": "Канал"},
         body=_body(
             "📣 Подпишитесь на наш канал\n\nПосле подписки нажмите «Я подписался».",
-            "📣 Join our channel\n\nThen tap «I have joined».",
         ),
     ),
     SeedScreen(
         code=CAPTCHA,
-        title={"ru": "Проверка на бота", "en": "Bot check"},
+        title={"ru": "Проверка на бота"},
         body=_body(
             "Проверим, что вы не бот\n\nНажмите на {emoji}",
-            "Quick check that you're not a bot\n\nTap {emoji}",
         ),
     ),
     SeedScreen(
-        code=LANG,
-        title={"ru": "Язык", "en": "Language"},
-        body=_body("🌐 Выберите язык", "🌐 Choose a language"),
-        buttons=(_MENU,),
-    ),
-    SeedScreen(
         code="notify_expiring",
-        title={"ru": "Скоро закончится", "en": "Expiring soon"},
+        title={"ru": "Скоро закончится"},
         body=_body(
             "⏳ Подписка закончится через {left}\n\nОна действует до {until}. Продлите заранее, "
             "чтобы VPN не отключился.",
-            "⏳ Your subscription ends in {left}\n\nIt is valid until {until}. Renew in advance so the VPN "
-            "keeps working.",
         ),
     ),
     SeedScreen(
         code="notify_expired",
-        title={"ru": "Закончилась", "en": "Expired"},
+        title={"ru": "Закончилась"},
         body=_body(
             "⌛ Подписка закончилась\n\nПродлите её: доступ вернётся сразу после оплаты, ссылка останется "
             "прежней.",
-            "⌛ Your subscription has ended\n\nRenew it and access comes back as soon as you pay. The link "
-            "stays the same.",
         ),
     ),
     SeedScreen(
         code="notify_trial_ending",
-        title={"ru": "Триал заканчивается", "en": "Trial ending"},
+        title={"ru": "Триал заканчивается"},
         body=_body(
             "🎁 Пробный период закончится через {left}\n\nПонравилось? Оформите подписку, "
             "подключение останется прежним.",
-            "🎁 Your trial ends in {left}\n\nLiked it? Subscribe and your connection stays the same.",
         ),
     ),
     SeedScreen(
         code="notify_traffic",
-        title={"ru": "Трафик", "en": "Traffic"},
+        title={"ru": "Трафик"},
         body=_body(
             "📊 Использовано {percent}% трафика\n\n{used} из {limit}.",
-            "📊 {percent}% of traffic used\n\n{used} of {limit}.",
         ),
     ),
     SeedScreen(
         code="notify_limited",
-        title={"ru": "Трафик закончился", "en": "Out of traffic"},
+        title={"ru": "Трафик закончился"},
         body=_body(
             "🚫 Трафик закончился\n\nИспользовано {used} из {limit}. Продлите подписку, чтобы продолжить.",
-            "🚫 Traffic is over\n\n{used} of {limit} used. Renew your subscription to keep going.",
         ),
     ),
     SeedScreen(
         code="notify_first_connected",
-        title={"ru": "Подключение работает", "en": "Connected"},
+        title={"ru": "Подключение работает"},
         body=_body(
             "✅ Подключение работает!\n\nVPN настроен. Если что-то пойдёт не так, напишите в поддержку.",
-            "✅ You are connected!\n\nThe VPN is set up. If something goes wrong, contact support.",
         ),
     ),
     SeedScreen(
         code="notify_device_added",
-        title={"ru": "Новое устройство", "en": "New device"},
+        title={"ru": "Новое устройство"},
         body=_body(
             "📱 Новое устройство: {device}\n\nЕсли это не вы, удалите его и перевыпустите ссылку.",
-            "📱 New device: {device}\n\nIf it was not you, remove it and issue a new link.",
         ),
     ),
     SeedScreen(
         code="notify_revoked",
-        title={"ru": "Ссылка обновлена", "en": "Link updated"},
+        title={"ru": "Ссылка обновлена"},
         body=_body(
             "♻️ Ссылка подписки обновлена\n\nСтарая больше не работает, добавьте подписку на устройства "
             "заново.",
-            "♻️ Your subscription link was renewed\n\nThe old one no longer works, so add the subscription to "
-            "your devices again.",
         ),
     ),
 )
@@ -537,16 +579,33 @@ USER_SCREENS: Final[tuple[SeedScreen, ...]] = (
 SEEDS: Final[Mapping[str, SeedScreen]] = MappingProxyType({s.code: s for s in USER_SCREENS})
 
 _HOME_NOW: Final = {b.system_key: b for b in SEEDS[HOME].buttons}
-#: ``(old seed, new seed or None)`` of the home buttons: see ``_HOME_V1``.
-HOME_RELAYOUT: Final[tuple[tuple[SeedButton, SeedButton | None], ...]] = tuple(
-    (old, _HOME_NOW.get(old.system_key)) for old in _HOME_V1
+
+
+def _relayout() -> tuple[tuple[SeedButton, SeedButton | None], ...]:
+    """v1, v2 and v3 fingerprints → the current seed (``None``: the button left home). A row equal to any
+    version moves (v2 «Подключиться» is already where it belongs and is not listed)."""
+    old = [*_HOME_V1, *(b for b in HOME_V2 if b.system_key != "connect"), *HOME_V3]
+    return tuple((b, _HOME_NOW.get(b.system_key)) for b in old)
+
+
+#: ``(old seed, new seed or None)`` of the home buttons, applied on start to rows the owner never touched
+#: (``svbg.content.editing.relayout_system_buttons``): v1 «Купить», «Продлить» and «Устройства» and the old
+#: «📱 Подписка» leave home (they live in «👤 Профиль»), «👤 Профиль» takes the colour and the time left of
+#: «Подписка», the rest takes the current rows. An install without a profile row gets the new one by seeding.
+HOME_RELAYOUT: Final[tuple[tuple[SeedButton, SeedButton | None], ...]] = _relayout()
+
+_PROFILE_NOW: Final = {b.system_key: b for b in SEEDS[PROFILE].buttons}
+
+#: The same for the profile of v3: its «📱 Подписка» goes away, the moved buttons take their new rows.
+PROFILE_RELAYOUT: Final[tuple[tuple[SeedButton, SeedButton | None], ...]] = tuple(
+    (b, _PROFILE_NOW.get(b.system_key) if b.system_key != "sub" else None) for b in _PROFILE_V3
 )
 
 
-def seed_text(code: str, lang: str) -> tuple[str, list[dict[str, Any]]]:
-    """Text and entities of a seed in ``lang`` (Russian fallback); ``("", [])`` for an unknown code."""
+def seed_text(code: str, _lang: str | None = None) -> tuple[str, list[dict[str, Any]]]:
+    """Text and entities of a seed; ``("", [])`` for an unknown code."""
     seed = SEEDS.get(code)
     if seed is None:
         return "", []
-    block = seed.body.get(lang) or seed.body.get("ru") or {}
+    block = seed.body.get("ru") or next(iter(seed.body.values()), {})
     return str(block.get("text") or ""), [dict(e) for e in block.get("entities") or ()]

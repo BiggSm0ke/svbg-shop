@@ -26,19 +26,12 @@ ALIAS_PREFIX: Final = "page."
 SYS_ALIASES: Final = ("faq", "rules", "offer")
 AfterConsent = Callable[["ScreenCtx"], Awaitable["HandlerResult"]]
 
-_T: Final[dict[str, dict[str, str]]] = {
-    "ru": {"accept": "✅ Принимаю", "menu": "🏠 Меню", "gone": "Страница недоступна", "thanks": "Спасибо!"},
-    "en": {
-        "accept": "✅ I agree",
-        "menu": "🏠 Menu",
-        "gone": "The page is unavailable",
-        "thanks": "Thank you!",
-    },
+_T: Final[dict[str, str]] = {
+    "accept": "✅ Принимаю",
+    "menu": "🏠 Меню",
+    "gone": "Страница недоступна",
+    "thanks": "Спасибо!",
 }
-
-
-def _t(lang: str, key: str) -> str:
-    return (_T.get(lang) or _T["ru"])[key]
 
 
 class PageUserScreens:
@@ -82,7 +75,7 @@ class PageUserScreens:
     async def screen(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:
         page = self.service.get(arg) if isinstance(arg, str) else None
         if page is None or (not page.enabled and not ctx.user.at_least("admin")):
-            return Redirect(self.home, toast=_t(ctx.lang, "gone"))
+            return Redirect(self.home, toast=_T["gone"])
         return self.view(page, ctx.lang)
 
     def view(self, page: Page, lang: str) -> View:
@@ -92,8 +85,8 @@ class PageUserScreens:
         rows = []
         if page.kind == "consent" and page.consent_version is not None:
             arg = f"{page.code}:{page.consent_version}"
-            rows.append([nav_button(_t(lang, "accept"), SCREEN, "ok", arg, style="success")])
-        rows.append([nav_button(_t(lang, "menu"), self.home)])
+            rows.append([nav_button(_T["accept"], SCREEN, "ok", arg, style="success")])
+        rows.append([nav_button(_T["menu"], self.home)])
         return View(text=text, entities=entities, keyboard=rows)
 
     async def accept(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:
@@ -108,4 +101,4 @@ class PageUserScreens:
             result = await self.after_consent(ctx)
             if result is not None:
                 return result
-        return Redirect(self.home, toast=_t(ctx.lang, "thanks"))
+        return Redirect(self.home, toast=_T["thanks"])

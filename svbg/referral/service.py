@@ -887,7 +887,7 @@ class ReferralService:
         user_id, key, values = _int(p.get("user_id")), p.get("key"), p.get("values")
         if user_id is None or not isinstance(key, str) or not isinstance(values, Mapping):
             raise PermanentJobError("повреждённое уведомление рефералки")
-        if key not in texts.USER["ru"]:
+        if key not in texts.USER:
             raise PermanentJobError(f"неизвестный текст рефералки {key}")
         if self.sender is None:
             log.info("referral: no sender, message %s to user %s dropped", key, user_id)
@@ -895,9 +895,9 @@ class ReferralService:
         async with self._db.read() as conn:
             row = (
                 await conn.execute(
-                    sa.select(
-                        users.c.telegram_id, users.c.language, users.c.bot_blocked_at, users.c.banned_at
-                    ).where(users.c.id == user_id)
+                    sa.select(users.c.telegram_id, users.c.bot_blocked_at, users.c.banned_at).where(
+                        users.c.id == user_id
+                    )
                 )
             ).first()
         if (
@@ -907,7 +907,7 @@ class ReferralService:
             or row.banned_at is not None
         ):
             return
-        text = texts.render(key, row.language, overrides=self.overrides, **dict(values))
+        text = texts.render(key, overrides=self.overrides, **dict(values))
         await self.sender.send(int(row.telegram_id), text, parse_mode="HTML")
 
     # ------------------------------------------------------------------------------------------ jobs

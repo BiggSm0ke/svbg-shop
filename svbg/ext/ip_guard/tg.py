@@ -361,7 +361,8 @@ def install_screens(router: Any, service: Callable[[], IpGuardService], db: Data
         lines, buttons, more = await screen_rows(db, section, page)
         title = dict(SECTIONS)[section]
         auto = "включён" if service().params().auto_block else "выключен"
-        text = "\n".join([f"🛡 <b>IP Guard · {title}</b>", f"Автоблок: {auto}", "", *(lines or ["Пусто."])])
+        head = admin_nav.header(SCREEN)
+        text = "\n".join([head, "", f"<b>{title}</b> · автоблок {auto}", "", *(lines or ["Пусто."])])
         keyboard: list[list[InlineKeyboardButton]] = []
         keyboard.append([nav_button(t, SCREEN, arg=f"{c}:0") for c, t in SECTIONS[:3]])
         keyboard.append([nav_button(t, SCREEN, arg=f"{c}:0") for c, t in SECTIONS[3:]])

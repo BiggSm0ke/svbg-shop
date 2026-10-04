@@ -47,7 +47,7 @@ from svbg.tg.ui.context import UserCtx
 from svbg.tg.ui.renderer import CAPTION_LIMIT, TEXT_LIMIT, as_markup, fit_text, utf16_len
 from svbg.tg.ui.view import View
 from svbg.tg.user import seeds
-from svbg.tg.user.deps import Config, cfg_str
+from svbg.tg.user.deps import Config
 from svbg.tg.user.render import plain_view
 from svbg.tg.user.texts import t
 
@@ -135,13 +135,10 @@ class UserMessenger:
 
     # ------------------------------------------------------------------------------------------ helpers
 
-    def lang_of(self, telegram_id: int | None) -> str:
-        if telegram_id is not None and self._users is not None:
-            cached = self._users.peek(telegram_id)
-            if cached is not None:
-                return cached.lang
-        default = cfg_str(self._config, "DEFAULT_LANGUAGE", "ru") if self._config is not None else "ru"
-        return default if default in ("ru", "en") else "ru"
+    @staticmethod
+    def lang_of(_telegram_id: int | None = None) -> str:
+        """The language of a message: always Russian (kept for older callers)."""
+        return "ru"
 
     def notice_view(self, notice: Notice, lang: str) -> View:
         """The notice as a message: content text (if the owner made the screen) or the notice's own text."""

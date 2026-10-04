@@ -15,7 +15,7 @@ from tests.tg.user.kit import UserEnv, build_user_env
 async def _paid_sub(env: UserEnv) -> tuple[int, int, int]:
     uid, tg = await env.new_user(balance=20_000)
     await env.open(tg)
-    await env.press(tg, "Подписка")
+    await env.press(tg, "Профиль")
     await env.press(tg, "Купить подписку")
     await env.press(tg, "1 мес.")
     await env.press(tg, "Оплатить")

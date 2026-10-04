@@ -5,7 +5,7 @@ Wiring (``svbg/app.py``, see the integration notes in the module docstring of :m
     self.deeplinks = from_app(self.deps, promo=..., ads=..., referral=...)
     # /start: the deep-link service wraps the user path's hook (channel gate)
     build_start_router(..., on_start=self.deeplinks.start_hook(self._on_start))
-    # after the channel check / language / consent succeeded:
+    # after the channel check / consent succeeded:
     redirect = await resume_redirect(self.deeplinks, ctx)
 """
 

@@ -93,7 +93,7 @@ MAX_USES_LIMIT: Final = 1_000_000
 #: The entry on the home screen for admins (``svbg.content.defaults``; added by the integration step).
 LINKS_BUTTON: Final = SeedButton(
     system_key="deeplinks",
-    label={"ru": "🔗 Ссылки", "en": "🔗 Links"},
+    label={"ru": "🔗 Ссылки"},
     action={"type": "screen", "target": SCREEN_LIST},
     row=9,
     sort=2,
@@ -102,16 +102,17 @@ LINKS_BUTTON: Final = SeedButton(
 
 _SCREEN_LABELS: Final = {
     "home": "🏠 Главная",
+    "sub": "👤 Профиль (старая ссылка «Подписка»)",
+    "profile": "👤 Профиль",
+    "promos": "🎟 Промокоды",
     "buy": "🛒 Покупка",
     "bal": "💰 Баланс",
     "connect": "🔗 Подключение",
     "dev": "📱 Устройства",
-    "lang": "🌐 Язык",
     "chan": "📣 Канал",
 }
 
 _T: Final[dict[str, str]] = {
-    "list_title": "🔗 <b>Ссылки</b>",
     "list_hint": "Ссылка открывает любой раздел бота и может сразу применить промокод. "
     "Переходы считаются с первого дня.",
     "list_empty": "Ссылок пока нет.",
@@ -121,7 +122,7 @@ _T: Final[dict[str, str]] = {
     "back": "⬅️ Назад",
     "prev": "◀️",
     "next": "▶️",
-    "to_list": "⬅️ К ссылкам",
+    "to_list": "⬅️ Ссылки",
     "cancel": "✖️ Отмена",
     "target_title": "🎯 <b>Куда ведёт ссылка?</b>",
     "t_home": "🏠 Главное меню",
@@ -442,7 +443,7 @@ class LinkBuilder:
         offset = int(arg) if isinstance(arg, str) and arg.isdigit() and len(arg) <= 9 else 0
         rows, total = await self.service.list_links(offset=offset, limit=PAGE)
         now = clock.now()
-        lines = [_T["list_title"], _T["list_hint"]]
+        lines = [admin_nav.header(SCREEN_LIST), _T["list_hint"]]
         keyboard: list[list[InlineKeyboardButton]] = []
         if not rows:
             lines.append(_T["list_empty"])
@@ -460,11 +461,12 @@ class LinkBuilder:
             if offset + PAGE < total:
                 nav.append(nav_button(_T["next"], SCREEN_LIST, arg=str(offset + PAGE)))
             keyboard.append(nav)
-        keyboard.append([nav_button(_T["new"], ACTIONS, "new", style="success")])
+        bottom = [nav_button(_T["new"], ACTIONS, "new", style="success")]
         if admin_nav.has_screen(self.router, "set.v") and (
             ctx.user.role == "owner" or ctx.user.has_perm("settings.business")
         ):
-            keyboard.append([nav_button(_T["settings"], "set.v", arg="m.links")])
+            bottom.append(nav_button(_T["settings"], "set.v", arg="m.links"))
+        keyboard.append(bottom)
         keyboard.append(admin_nav.back_row(SCREEN_LIST))
         return View(text="\n\n".join(lines), parse_mode="HTML", keyboard=keyboard)
 
@@ -511,7 +513,7 @@ class LinkBuilder:
             keyboard.append(
                 [nav_button(label[:60], ACTIONS, "scr", code) for code, label in items[i : i + 2]]
             )
-        keyboard.append([nav_button(_T["back"], SCREEN_NEW)])
+        keyboard.append(admin_nav.with_admin([nav_button(_T["back"], SCREEN_NEW)]))
         text = _T["screens_title"] if items else _T["screens_title"] + "\n\n" + _T["screens_empty"]
         return View(text=text, parse_mode="HTML", keyboard=keyboard)
 
@@ -536,7 +538,7 @@ class LinkBuilder:
             if getattr(p, "availability", "all") == "link":
                 label += _T["plan_link_only"]
             keyboard.append([nav_button(f"📦 {label}"[:60], ACTIONS, "pl", str(p.code))])
-        keyboard.append([nav_button(_T["back"], SCREEN_NEW)])
+        keyboard.append(admin_nav.with_admin([nav_button(_T["back"], SCREEN_NEW)]))
         text = _T["plans_title"] if plans else _T["plans_title"] + "\n\n" + _T["plans_empty"]
         return View(text=text, parse_mode="HTML", keyboard=keyboard)
 
@@ -619,7 +621,7 @@ class LinkBuilder:
         keyboard = [
             [nav_button(_T["exp_forever"], ACTIONS, "exp", "0")],
             presets,
-            [nav_button(_T["back"], SCREEN_DRAFT)],
+            admin_nav.with_admin([nav_button(_T["back"], SCREEN_DRAFT)]),
         ]
         return View(text=_T["exp_title"], parse_mode="HTML", keyboard=keyboard)
 
@@ -768,7 +770,7 @@ class LinkBuilder:
             else nav_button(_T["b_on"], ACTIONS, "on", str(link.id), style="success")
         )
         keyboard.append([toggle])
-        keyboard.append([nav_button(_T["to_list"], SCREEN_LIST)])
+        keyboard.append(admin_nav.with_admin([nav_button(_T["to_list"], SCREEN_LIST)]))
         return View(text="\n\n".join(lines), parse_mode="HTML", keyboard=keyboard, toast=toast)
 
     async def _toggle(self, ctx: ScreenCtx, arg: Any, enabled: bool) -> HandlerResult:

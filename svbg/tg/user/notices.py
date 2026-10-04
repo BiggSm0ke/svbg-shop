@@ -55,7 +55,7 @@ class TelegramNotificationSender:
         self._bot_username = bot_username
 
     def view(self, n: Notification) -> View:
-        lang = n.lang if n.lang in ("ru", "en") else self._messenger.lang_of(n.telegram_id)
+        lang = "ru"
         tz = self._tz()
         until = fmt_datetime(n.paid_until, tz) if n.is_trial else fmt_date(n.paid_until, tz)
         left = fmt_left((n.paid_until - now()).total_seconds(), lang) if n.paid_until is not None else "—"

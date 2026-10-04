@@ -160,17 +160,6 @@ _T: Final = {
     ),
     "amount_missing": "сумма не указана",
 }
-#: English of the texts the **user** sees (same keys and placeholders as in :data:`_T`).
-_T_EN: Final = {
-    "no_instance": "This payment method is not available right now. Please choose another one.",
-    "currency": "This payment method does not accept {currency}.",
-    "too_small": "The minimum amount for this method is {amount}.",
-    "too_large": "The maximum amount for this method is {amount}.",
-    "frozen": "Payment is not available right now.",
-    "create_failed": "Could not create the invoice: {reason}. Please try again or choose another method.",
-    "create_timeout": "the payment system did not respond in time",
-    "create_error": "payment system error",
-}
 
 
 class Outcome(enum.StrEnum):
@@ -261,18 +250,18 @@ class ApplyResult:
 
 
 class CheckoutError(Exception):
-    """An invoice could not be created; ``human`` is shown to the user (Russian), ``human_en`` — in English
-    (``None``: no translation, see :meth:`localized`)."""
+    """An invoice could not be created; ``human`` is shown to the user (Russian). ``human_en`` (an old
+    English translation) is accepted and ignored."""
 
     def __init__(self, human: str, *, retryable: bool = False, human_en: str | None = None) -> None:
+        del human_en
         super().__init__(human)
         self.human = human
-        self.human_en = human_en
         self.retryable = retryable
 
-    def localized(self, lang: str | None) -> str:
-        """``human`` in ``lang`` (Russian fallback)."""
-        return (self.human_en or self.human) if lang == "en" else self.human
+    def localized(self, _lang: str | None = None) -> str:
+        """``human`` (kept for old callers that pass a language; always Russian)."""
+        return self.human
 
 
 class SpendDeniedError(CheckoutError):
@@ -329,11 +318,11 @@ def _currency(code: str | None) -> str:
     return (code or "").strip().upper()
 
 
-def _money(amount_minor: int | None, currency: str | None, lang: str = "ru") -> str:
+def _money(amount_minor: int | None, currency: str | None) -> str:
     if amount_minor is None or currency is None:
         return "—"
     try:
-        return format_money(amount_minor, currency, lang)
+        return format_money(amount_minor, currency)
     except ValueError:
         return f"{amount_minor} {currency}"
 
@@ -440,24 +429,16 @@ class PaymentCore:
         :class:`CheckoutError` / :class:`SpendDeniedError`. One SQL statement plus the guards' own."""
         inst = self.instances.get(instance_id)
         if inst is None or not inst.enabled:
-            raise CheckoutError(_T["no_instance"], human_en=_T_EN["no_instance"])
+            raise CheckoutError(_T["no_instance"])
         cur = currency.upper()
         if isinstance(amount_minor, bool) or not isinstance(amount_minor, int) or amount_minor <= 0:
             raise ValueError("amount_minor must be a positive int")
         if not inst.accepts(cur):
-            raise CheckoutError(
-                _T["currency"].format(currency=cur), human_en=_T_EN["currency"].format(currency=cur)
-            )
+            raise CheckoutError(_T["currency"].format(currency=cur))
         if inst.min_minor is not None and amount_minor < inst.min_minor:
-            raise CheckoutError(
-                _T["too_small"].format(amount=_money(inst.min_minor, cur)),
-                human_en=_T_EN["too_small"].format(amount=_money(inst.min_minor, cur, "en")),
-            )
+            raise CheckoutError(_T["too_small"].format(amount=_money(inst.min_minor, cur)))
         if inst.max_minor is not None and amount_minor > inst.max_minor:
-            raise CheckoutError(
-                _T["too_large"].format(amount=_money(inst.max_minor, cur)),
-                human_en=_T_EN["too_large"].format(amount=_money(inst.max_minor, cur, "en")),
-            )
+            raise CheckoutError(_T["too_large"].format(amount=_money(inst.max_minor, cur)))
         refusal = await self.can_spend(conn, user_id)
         if refusal:
             raise SpendDeniedError(refusal)
@@ -496,7 +477,7 @@ class PaymentCore:
         inst = self.instances.get(pending.instance_id)
         if inst is None:
             await self._fail(pending.id, _T["no_instance"])
-            raise CheckoutError(_T["no_instance"], human_en=_T_EN["no_instance"])
+            raise CheckoutError(_T["no_instance"])
         hint = pending.method_kind if pending.method_kind in MethodKind._value2member_map_ else None
         intent = PaymentIntent(
             payment_id=pending.id,
@@ -516,24 +497,17 @@ class PaymentCore:
         except TimeoutError:
             await self._fail(pending.id, _T["create_timeout"])
             raise CheckoutError(
-                _T["create_failed"].format(reason=_T["create_timeout"]),
-                retryable=True,
-                human_en=_T_EN["create_failed"].format(reason=_T_EN["create_timeout"]),
+                _T["create_failed"].format(reason=_T["create_timeout"]), retryable=True
             ) from None
         except ProviderError as exc:
             await self._fail(pending.id, exc.human)
             raise CheckoutError(
-                _T["create_failed"].format(reason=exc.human),
-                retryable=exc.retryable,
-                human_en=_T_EN["create_failed"].format(reason=_T_EN["create_error"]),
+                _T["create_failed"].format(reason=exc.human), retryable=exc.retryable
             ) from None
         except Exception as exc:
             log.exception("payments: %s create() failed", inst.slug)
             await self._fail(pending.id, type(exc).__name__)
-            raise CheckoutError(
-                _T["create_failed"].format(reason="ошибка платёжки"),
-                human_en=_T_EN["create_failed"].format(reason=_T_EN["create_error"]),
-            ) from None
+            raise CheckoutError(_T["create_failed"].format(reason="ошибка платёжки")) from None
         plan, first = self.poll_plan(inst, checkout.kind)
         now = self._clock()
         try:
@@ -563,10 +537,7 @@ class PaymentCore:
         except IntegrityError:
             log.exception("payments: %s returned an external id that belongs to another payment", inst.slug)
             await self._fail(pending.id, "duplicate external id")
-            raise CheckoutError(
-                _T["create_failed"].format(reason="ошибка платёжки"),
-                human_en=_T_EN["create_failed"].format(reason=_T_EN["create_error"]),
-            ) from None
+            raise CheckoutError(_T["create_failed"].format(reason="ошибка платёжки")) from None
         if plan == "nodomain" and self.presence is not None:
             self.presence.touch(pending.id, pending.user_id, inst.id, checkout.external_id)
         return CheckoutResult(payment_id=pending.id, instance_id=inst.id, checkout=checkout)

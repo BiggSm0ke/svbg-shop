@@ -71,7 +71,6 @@ async def contexts(db: CountingDatabase) -> dict[int, UserCtx]:
             int(r["id"]),
             telegram_id=r["telegram_id"],
             role=r["role"],
-            lang=r["language"] if r["language"] in ("ru", "en") else "ru",
             channel_member=members.get(r["telegram_id"]),
         )
         status = await reader.load(int(r["id"]))
@@ -140,7 +139,10 @@ async def test_spot_checks(db: CountingDatabase) -> None:
         u["two"],
     }
     assert await sql_ids(db, to_sql({"days_left": 1}, at=NOW)) == {u["half_day"]}
-    assert await sql_ids(db, to_sql({"lang": "ru"}, at=NOW, default_lang="en")) == set()
+    # Russian-only bot: an old «lang» atom matches everyone for «ru» and nobody otherwise.
+    everyone = await sql_ids(db, to_sql({}, at=NOW))
+    assert await sql_ids(db, to_sql({"lang": "ru"}, at=NOW, default_lang="en")) == everyone
+    assert await sql_ids(db, to_sql({"lang": ["en"]}, at=NOW)) == set()
 
 
 @pytest.mark.parametrize(
@@ -188,7 +190,9 @@ async def test_presets_and_base_filter(db: CountingDatabase) -> None:
     assert await sql_ids(db, recipients_where({"preset": "expired30"}, at=NOW)) == {u["expired5"], u["two"]}
     assert await sql_ids(db, recipients_where({"preset": "trial"}, at=NOW)) == {u["trial"]}
     assert await sql_ids(db, recipients_where({"preset": "balance"}, at=NOW)) == {u["active"], u["admin_de"]}
-    assert await sql_ids(db, recipients_where({"preset": "lang_en"}, at=NOW)) == {u["active"]}
+    # Old drafts with the removed language presets: «русский» is everyone, «английский» is nobody.
+    assert await sql_ids(db, recipients_where({"preset": "lang_ru"}, at=NOW)) == everyone
+    assert await sql_ids(db, recipients_where({"preset": "lang_en"}, at=NOW)) == set()
     assert await sql_ids(db, recipients_where({"preset": "active"}, at=NOW)) == {
         u["active"],
         u["half_day"],
@@ -196,7 +200,8 @@ async def test_presets_and_base_filter(db: CountingDatabase) -> None:
     }
     combined = recipients_where({"preset": "active", "dsl": {"has_paid": True}}, at=NOW)
     assert await sql_ids(db, combined) == {u["active"], u["support"]}
-    assert set(PRESETS) >= {"all", "active", "trial", "expired30", "never_paid", "balance", "lang_ru"}
+    assert set(PRESETS) >= {"all", "active", "trial", "expired30", "never_paid", "balance"}
+    assert not {"lang_ru", "lang_en"} & set(PRESETS)
 
 
 async def test_audience_without_the_marketing_column(db: CountingDatabase) -> None:

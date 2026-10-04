@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from svbg.db.engine import Database
     from svbg.subscriptions.channel import ChannelService
 
-__all__ = ["TRIAL_TEXTS", "TRIAL_TEXTS_EN", "TrialRefused", "TrialResult", "TrialService", "trial_text"]
+__all__ = ["TRIAL_TEXTS", "TrialRefused", "TrialResult", "TrialService", "trial_text"]
 
 log = logging.getLogger("svbg.subscriptions.trial")
 
@@ -50,26 +50,11 @@ TRIAL_TEXTS: Final[Mapping[str, str]] = {
     "banned": "Доступ ограничен. Напишите в поддержку.",
     "no_user": "Нажмите /start и попробуйте ещё раз.",
 }
-#: English of :data:`TRIAL_TEXTS` (same keys).
-TRIAL_TEXTS_EN: Final[Mapping[str, str]] = {
-    "disabled": "The trial is not available right now.",
-    "used": "The trial has already been used.",
-    "has_subscription": "The trial is for new users only: you already have a subscription.",
-    "not_member": "The trial is for our channel subscribers. Join the channel and tap «Check».",
-    "channel_unknown": "Could not check the channel subscription. Please try again in a minute.",
-    "channel_not_configured": "The trial is temporarily unavailable.",
-    "no_plan": "The trial is temporarily unavailable.",
-    "banned": "Access is restricted. Please contact support.",
-    "no_user": "Press /start and try again.",
-}
 
 
-def trial_text(reason: str | None, lang: str | None = "ru") -> str:
-    """The refusal text for ``reason`` in ``lang`` (Russian fallback; empty for an unknown reason)."""
-    key = reason or ""
-    if lang == "en" and key in TRIAL_TEXTS_EN:
-        return TRIAL_TEXTS_EN[key]
-    return TRIAL_TEXTS.get(key, "")
+def trial_text(reason: str | None, _lang: str | None = None) -> str:
+    """The refusal text for ``reason`` (empty for an unknown reason); the language argument is ignored."""
+    return TRIAL_TEXTS.get(reason or "", "")
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,8 +69,9 @@ class TrialResult:
     def text(self) -> str:
         return TRIAL_TEXTS.get(self.reason or "", "")
 
-    def localized(self, lang: str | None) -> str:
-        return trial_text(self.reason, lang)
+    def localized(self, _lang: str | None = None) -> str:
+        """:attr:`text` (kept for old callers that pass a language; always Russian)."""
+        return self.text
 
 
 class TrialRefused(Exception):

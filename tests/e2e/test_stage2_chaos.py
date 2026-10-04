@@ -35,7 +35,7 @@ async def _waiting_purchase(shop: Shop, telegram_id: int) -> tuple[int, dict[str
     """A purchase with an empty balance up to the RollyPay invoice; returns (main message, payment row)."""
     person = shop.person(telegram_id)
     main = await person.start()
-    await person.press("Подписка", expect="📱 Подписка")
+    await person.press("Профиль", expect="👤 Профиль")
     await person.press("Купить подписку", expect="Выберите срок")
     await person.press("1 мес.", expect="Не хватает 179 ₽")
     await person.press("СБП", expect="Счёт на 179 ₽ готов")
@@ -99,7 +99,7 @@ async def test_process_killed_in_the_middle_of_fulfill_applies_nothing_twice(
         oleg = shop.person(6_002)
         await oleg.start()
         await shop.fund(6_002, 20_000)
-        await oleg.press("Подписка", expect="📱 Подписка")
+        await oleg.press("Профиль", expect="👤 Профиль")
         await oleg.press("Купить подписку", expect="Выберите срок")
         await oleg.press("1 мес.", expect="Спишем с баланса")
         await oleg.press("Оплатить 179")

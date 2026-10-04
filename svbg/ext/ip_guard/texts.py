@@ -1,5 +1,4 @@
-"""IP Guard texts (Russian, Telegram HTML; the messages to the user also exist in English) and pure card
-renderers (05 §2.2.2).
+"""IP Guard texts (Russian, Telegram HTML) and pure card renderers (05 §2.2.2).
 
 Cards are built **from database rows** (never from ``callback.message``): a restart or a second admin sees the
 same card. They are :class:`~svbg.tg.report.Report` objects (key-value lines, tables, folded top IPs): a rich
@@ -22,7 +21,6 @@ __all__ = [
     "KIND_TITLES",
     "MSK",
     "USER_KEYS",
-    "USER_T_EN",
     "T",
     "anomaly_card",
     "block_card",
@@ -176,32 +174,9 @@ USER_KEYS: Final[tuple[str, ...]] = (
     "status_line",
 )
 
-#: English of :data:`USER_KEYS` (same placeholders and markup as the Russian ones).
-USER_T_EN: Final[Mapping[str, str]] = {
-    "user_blocked": (
-        "🚫 <b>Subscription blocked</b>\n\n"
-        "Your link is being used from {n} different IPs. Looks like it was shared with other people.\n"
-        "Your remaining days are frozen and will come back once you are unblocked.\n\n"
-        "Contact support and we will sort it out."
-    ),
-    "user_unblocked": ("✅ <b>Access restored</b>\nThe frozen time is back: {left}.\nActive until {until}."),
-    "user_unblocked_revoked": "\n\nThe link was renewed. Open «📱 My subscription» and connect again.",
-    "user_unblocked_expired": (
-        "✅ <b>Access restored</b>\nYour subscription has ended. Renew it to connect."
-    ),
-    "btn_support": "💬 Support",
-    "btn_close": "Close",
-    "btn_my_sub": "📱 My subscription",
-    "btn_renew": "💳 Renew",
-    "banner": "🚫 <b>Subscription blocked</b>\nDays are frozen, {left} left.\nContact support.",
-    "status_line": "🚫 Subscription blocked. Contact support.",
-}
 
-
-def user_t(key: str, lang: str | None = "ru") -> str:
-    """A user-facing string of :data:`USER_KEYS` in ``lang`` (Russian fallback)."""
-    if lang == "en" and key in USER_T_EN:
-        return USER_T_EN[key]
+def user_t(key: str, _lang: str | None = None) -> str:
+    """A user-facing string of :data:`USER_KEYS` (the second argument, an old language, is ignored)."""
     return T[key]
 
 
@@ -243,9 +218,9 @@ def fmt_time(value: datetime | None) -> str:
     return DASH if value is None else value.astimezone(MSK).strftime("%H:%M")
 
 
-def fmt_duration(seconds: float | None, lang: str | None = "ru") -> str:
-    """``N дн. M ч``; under an hour — ``M мин`` (English: ``N d M h`` / ``M min``)."""
-    d, h, m = ("d", "h", "min") if lang == "en" else ("дн.", "ч", "мин")
+def fmt_duration(seconds: float | None, _lang: str | None = None) -> str:
+    """``N дн. M ч``; under an hour — ``M мин``."""
+    d, h, m = "дн.", "ч", "мин"
     total = max(0, int(seconds or 0))
     if total < 3600:
         return f"{total // 60} {m}"
@@ -476,12 +451,12 @@ def digest_card(alert: Mapping[str, Any]) -> Report:
 
 
 def unblock_user_text(
-    outcome: str, *, left: int, until: datetime | None, revoked: bool, lang: str | None = "ru"
+    outcome: str, *, left: int, until: datetime | None, revoked: bool, lang: str | None = None
 ) -> str:
     if outcome != "active":
-        return user_t("user_unblocked_expired", lang)
-    text = user_t("user_unblocked", lang).format(left=fmt_duration(left, lang), until=fmt_dt(until))
-    return text + (user_t("user_unblocked_revoked", lang) if revoked else "")
+        return user_t("user_unblocked_expired")
+    text = user_t("user_unblocked").format(left=fmt_duration(left), until=fmt_dt(until))
+    return text + (user_t("user_unblocked_revoked") if revoked else "")
 
 
 def ips_file(

@@ -112,12 +112,13 @@ class ScreenEntry:
     def id(self) -> int:
         return self.screen.id
 
-    def keyboard(self, lang: str) -> KeyboardTemplate:
-        kb = self.keyboards.get(lang) or self.keyboards.get(self.default_lang)
+    def keyboard(self, _lang: str | None = None) -> KeyboardTemplate:
+        """The (Russian) keyboard; the argument, an old language, is ignored."""
+        kb = self.keyboards.get(self.default_lang)
         return kb if kb is not None else EMPTY_KEYBOARD
 
-    def text(self, lang: str) -> TextBlock:
-        return self.screen.text(lang, self.default_lang)
+    def text(self, _lang: str | None = None) -> TextBlock:
+        return self.screen.text(None, self.default_lang)
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,8 +145,9 @@ class ContentSnapshot:
 EMPTY_SNAPSHOT: Final = ContentSnapshot(0, MappingProxyType({}), MappingProxyType({}), MappingProxyType({}))
 
 
-def _pick_label(labels: Mapping[str, str], lang: str, default_lang: str) -> str:
-    text = labels.get(lang) or labels.get(default_lang)
+def _pick_label(labels: Mapping[str, str], _lang: str | None, default_lang: str) -> str:
+    """The Russian label (else any); the bot is Russian-only."""
+    text = labels.get(default_lang)
     if not text:
         text = next((t for t in labels.values() if t.strip()), "")
     return text
@@ -157,7 +159,8 @@ def compile_keyboard(
     default_lang: str = "ru",
     conditions: Mapping[int, Condition | None] | None = None,
 ) -> KeyboardTemplate:
-    """Group enabled buttons by ``row`` (ordered by ``row, sort``), resolving labels for ``lang``.
+    """Group enabled buttons by ``row`` (ordered by ``row, sort``) with their Russian labels (``lang`` is
+    accepted for old callers and ignored).
 
     ``conditions`` maps ``id(button)`` to its compiled condition; when absent, ``visible_if`` is compiled
     here (raising :class:`ConditionError` for invalid DSL).
@@ -182,13 +185,6 @@ def compile_keyboard(
     return KeyboardTemplate(tuple(rows))
 
 
-def _languages(screen: Screen) -> set[str]:
-    langs = set(screen.body)
-    for b in screen.buttons:
-        langs.update(b.label)
-    return langs
-
-
 def _screen_label(row: Mapping[str, Any]) -> str:
     return f"screen {row.get('code') or row.get('id')}"
 
@@ -196,10 +192,10 @@ def _screen_label(row: Mapping[str, Any]) -> str:
 def _media_from_row(row: Mapping[str, Any]) -> Media:
     kind = row.get("kind")
     if kind not in MEDIA_KINDS:
-        raise ContentError("kind", f"unknown media kind {kind!r}")
+        raise ContentError("kind", f"неизвестный тип медиа {kind!r}")
     file_ids = row.get("file_ids") or {}
     if not isinstance(file_ids, Mapping):
-        raise ContentError("file_ids", "expected an object")
+        raise ContentError("file_ids", "нужен объект")
     return Media(
         id=int(row["id"]),
         kind=kind,
@@ -266,10 +262,7 @@ def build_snapshot(
             continue
         if screen.media_id is not None and screen.media_id not in media_by_id:
             problems.append(f"{_screen_label(row)}: media {screen.media_id} is missing")
-        langs = _languages(screen) | {default_lang}
-        keyboards = {
-            lang: compile_keyboard(screen.buttons, lang, default_lang, conditions) for lang in sorted(langs)
-        }
+        keyboards = {default_lang: compile_keyboard(screen.buttons, default_lang, default_lang, conditions)}
         entry = ScreenEntry(screen, MappingProxyType(keyboards), default_lang)
         by_id[screen.id] = entry
         if screen.code:

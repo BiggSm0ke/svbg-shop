@@ -215,7 +215,6 @@ class UserJobs:
                             subscriptions.c.is_trial,
                             subscriptions.c.panel_user_id,
                             users.c.telegram_id,
-                            users.c.language,
                             users.c.bot_blocked_at,
                         )
                         .select_from(subscriptions.join(users, users.c.id == subscriptions.c.user_id))
@@ -239,9 +238,9 @@ class UserJobs:
             return
         if row["link_state"] != "linked" or not row["subscription_url"]:
             raise RetryJob(UI_RECHECK_S, "пользователь панели ещё не готов")
-        lang = row["language"] if row["language"] in ("ru", "en") else "ru"
+        lang = "ru"
         url = str(row["subscription_url"])
-        user = UserCtx(int(row["user_id"]), telegram_id=row["telegram_id"], lang=lang)
+        user = UserCtx(int(row["user_id"]), telegram_id=row["telegram_id"])
         tz = self._tz()
         until = fmt_datetime(row["paid_until"], tz) if row["is_trial"] else fmt_date(row["paid_until"], tz)
         code = seeds.TRIAL_DONE if kind == "trial" else seeds.REISSUE_DONE
@@ -293,8 +292,7 @@ class UserJobs:
             if not self._watch.watching(int(telegram_id)):
                 return  # the user went elsewhere: do not pull them back
             self._watch.disarm(int(telegram_id))
-        lang = row["language"] if row["language"] in ("ru", "en") else "ru"
-        user = UserCtx(int(row["user_id"]), telegram_id=telegram_id, lang=lang)
+        user = UserCtx(int(row["user_id"]), telegram_id=telegram_id)
         try:
             await self._show(user, chat_id, seeds.DEVICES, arg)
         except Exception:  # noqa: BLE001 - the list is stored; showing it again is a convenience

@@ -210,13 +210,14 @@ def _check_button(values: Mapping[str, Any]) -> Button:
     return button
 
 
-def _caption_problem(body: Mapping[str, Any]) -> str | None:
-    """A language whose text is too long for a media caption (attach mode), if any."""
-    for lang, block in body.items():
-        text = block.get("text", "") if isinstance(block, Mapping) else str(block)
-        if utf16_len(text) > CAPTION_LIMIT:
-            return lang
-    return None
+def _caption_problem(body: Mapping[str, Any]) -> bool:
+    """True when the shown (Russian) text is too long for a media caption (attach mode). An old ``en`` text
+    stays in the database unused and does not count."""
+    block = body.get("ru") or next(iter(body.values()), None)
+    if block is None:
+        return False
+    text = block.get("text", "") if isinstance(block, Mapping) else str(block)
+    return utf16_len(text) > CAPTION_LIMIT
 
 
 def _refs_text(refs: Sequence[str]) -> str:
@@ -350,7 +351,7 @@ async def migrate_default_banner(conn: AsyncConnection, media_id: int, *, previe
     return changed
 
 
-RETIRED_SUMMARY: Final = "🧹 Убраны старые кнопки сотрудников (всё теперь в «🛠 Админка»)"
+RETIRED_SUMMARY: Final = "🧹 Убраны старые кнопки главного меню"
 
 
 async def retire_system_buttons(
@@ -419,9 +420,7 @@ async def retire_system_buttons(
     return deleted
 
 
-RELAYOUT_SUMMARY: Final = (
-    "🧭 Главное меню по-новому: «📱 Подписка» вместо «Купить», «Продлить» и «Устройства»"
-)
+RELAYOUT_SUMMARY: Final = "🧭 Кнопки по-новому: «👤 Профиль» теперь и раздел подписки"
 
 
 def _same_as_seed(row: Mapping[str, Any], seed: defaults.SeedButton) -> bool:
@@ -446,9 +445,10 @@ async def relayout_system_buttons(
     audited batch per screen, so «↩️ Отменить» in the constructor's history brings the old layout back.
     Returns how many rows changed."""
     moves = defaults.RELAYOUT_SYSTEM_BUTTONS if moves is None else moves
-    by_screen: dict[str, dict[str, tuple[defaults.SeedButton, defaults.SeedButton | None]]] = {}
+    # a button may have several old seeds (one per earlier version): a row equal to any of them moves
+    by_screen: dict[str, dict[str, list[tuple[defaults.SeedButton, defaults.SeedButton | None]]]] = {}
     for code, old, new in moves:
-        by_screen.setdefault(code, {})[old.system_key] = (old, new)
+        by_screen.setdefault(code, {}).setdefault(str(old.system_key), []).append((old, new))
     changed = 0
     for code, wanted in by_screen.items():
         screen = (
@@ -473,9 +473,9 @@ async def relayout_system_buttons(
             .all()
         )
         stale = [
-            (r, wanted[str(r["system_key"])][1])
+            (r, next(new for old, new in wanted[str(r["system_key"])] if _same_as_seed(r, old)))
             for r in rows
-            if _same_as_seed(r, wanted[str(r["system_key"])][0])
+            if any(_same_as_seed(r, old) for old, _new in wanted[str(r["system_key"])])
         ]
         if not stale:
             continue
@@ -625,17 +625,16 @@ class ContentEditor:
         ``PUBLIC_URL``."""
         return mode == "attach" or (mode == "preview" and not self.preview_ok())
 
-    def _caption_error(self, mode: str | None, lang: str | None = None) -> EditError:
-        which = f" ({lang})" if lang else ""
+    def _caption_error(self, mode: str | None) -> EditError:
         if mode == "preview":
             return EditError(
                 "caption_too_long",
                 f"PUBLIC_URL не задан — «превью-ссылка» не работает, медиа уходит вложением, а подпись — до "
-                f"{CAPTION_LIMIT} символов. Текст{which} длиннее: сократите его или задайте PUBLIC_URL.",
+                f"{CAPTION_LIMIT} символов. Текст длиннее: сократите его или задайте PUBLIC_URL.",
             )
         return EditError(
             "caption_too_long",
-            f"У экрана медиа-вложение: подпись — до {CAPTION_LIMIT} символов, а текст{which} длиннее. "
+            f"У экрана медиа-вложение: подпись — до {CAPTION_LIMIT} символов, а текст длиннее. "
             "Сократите текст или переключите режим медиа на «превью-ссылку» (там до 4096).",
         )
 
@@ -768,7 +767,7 @@ class ContentEditor:
             changes["body"] = body
             return changes
 
-        return await self._run(screen_id, expected_version, actor, f"Текст ({lang})", fn, warnings=warnings)
+        return await self._run(screen_id, expected_version, actor, "Текст экрана", fn, warnings=warnings)
 
     async def remove_text(
         self, screen_id: int, lang: str, *, expected_version: int | None, actor: int | None
@@ -802,10 +801,8 @@ class ContentEditor:
                     raise NotFoundError("Файл")
                 if kind not in ("photo", "animation", "video"):
                     raise EditError("bad_kind", "На экран можно поставить фото, GIF или видео.")
-                if self.as_attachment(old["media_mode"]):
-                    lang = _caption_problem(old["body"] or {})
-                    if lang is not None:
-                        raise self._caption_error(old["media_mode"], lang)
+                if self.as_attachment(old["media_mode"]) and _caption_problem(old["body"] or {}):
+                    raise self._caption_error(old["media_mode"])
             return {"media_id": media_id}
 
         text = summary or ("Медиа убрано" if media_id is None else "Новое медиа")
@@ -818,16 +815,15 @@ class ContentEditor:
             raise EditError("bad_mode", "Неизвестный режим медиа.")
 
         async def fn(_conn: AsyncConnection, old: dict[str, Any], _audit: _Audit) -> dict[str, Any]:
-            if self.as_attachment(mode) and old["media_id"] is not None:
-                lang = _caption_problem(old["body"] or {})
-                if lang is not None:
-                    if mode == "preview":
-                        raise self._caption_error(mode, lang)
-                    raise EditError(
-                        "caption_too_long",
-                        f"Текст ({lang}) длиннее {CAPTION_LIMIT} символов — во вложении он не поместится. "
-                        "Сократите текст или оставьте «превью-ссылку».",
-                    )
+            too_long = old["media_id"] is not None and _caption_problem(old["body"] or {})
+            if too_long and self.as_attachment(mode):
+                if mode == "preview":
+                    raise self._caption_error(mode)
+                raise EditError(
+                    "caption_too_long",
+                    f"Текст длиннее {CAPTION_LIMIT} символов — во вложении он не поместится. "
+                    "Сократите текст или оставьте «превью-ссылку».",
+                )
             return {"media_mode": mode}
 
         label = "вложение" if mode == "attach" else "превью-ссылка"
@@ -889,7 +885,7 @@ class ContentEditor:
         menu = {
             "row": MENU_ROW,
             "sort": 0,
-            "label": {"ru": "🏠 Меню", "en": "🏠 Menu"},
+            "label": {"ru": "🏠 Меню"},
             "action": {"type": "screen", "target": menu_target},
             "enabled": True,
         }

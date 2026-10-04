@@ -38,7 +38,6 @@ class PromoStatus(enum.StrEnum):
 class PromoOutcome:
     status: PromoStatus
     text: str | None = None  # a short Russian line for the user («Промокод AUTUMN −20% применён ✓»)
-    text_en: str | None = None  # the same line in English
 
 
 @dataclass(frozen=True, slots=True)

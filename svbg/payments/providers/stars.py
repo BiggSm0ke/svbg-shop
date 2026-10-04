@@ -46,7 +46,6 @@ __all__ = [
     "LATE_PAYABLE",
     "STARS_CURRENCY",
     "TEXTS",
-    "TEXTS_EN",
     "PayloadKind",
     "StarsConfig",
     "TelegramStars",
@@ -74,26 +73,6 @@ TEXTS: Final = {
     "currency": "Звёздами оплачиваются только счета в ⭐.",
     "probe_ok": "Курс {rate} за 1 ⭐. Счета выставляет сам бот, ключи не нужны.",
 }
-#: English of the buyer-facing :data:`TEXTS` (same keys and placeholders).
-TEXTS_EN: Final = {
-    "not_found": "Invoice not found. Please create a new one in the bot.",
-    "paid": "This invoice has already been paid.",
-    "closed": "This invoice is no longer valid. Please create a new one in the bot.",
-    "changed": "The invoice amount has changed. Please create a new one in the bot.",
-    "outdated": "This invoice is out of date. Please create a new one in the bot.",
-    "too_large": "The amount is too large for Stars (more than {max} ⭐). Please choose another method.",
-    "currency": "Only invoices in ⭐ can be paid with Stars.",
-}
-
-
-def localize_pre_checkout(text: str | None, lang: str | None) -> str | None:
-    """A refusal of :data:`TEXTS` (as :meth:`Stars.check_pre_checkout` returns it) in ``lang``."""
-    if text is None or lang != "en":
-        return text
-    for key, en in TEXTS_EN.items():
-        if "{" not in TEXTS[key] and text == TEXTS[key]:
-            return en
-    return text
 
 
 class PayloadKind(enum.StrEnum):

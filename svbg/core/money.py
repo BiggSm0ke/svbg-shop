@@ -62,9 +62,6 @@ CURRENCY_SYMBOL: Final = MappingProxyType(
     }
 )
 
-# Symbols written before the number in English formatting ("$1,699.50").
-_PREFIX_SYMBOLS_EN: Final = frozenset({"USD", "EUR", "GBP", "CNY"})
-
 # Upper bound for parsed/formatted amounts: far below BIGINT, far above any real payment.
 MAX_AMOUNT_MINOR: Final = 10**15
 
@@ -87,33 +84,25 @@ def _group(digits: str, sep: str) -> str:
     return sep.join(parts)
 
 
-def format_money(amount_minor: int, currency: str, locale: str = "ru", *, nbsp: bool = False) -> str:
-    """Human-readable amount: ``179 ₽``, ``1 699,50 ₽``, ``100 ⭐`` (ru); ``$1,699.50`` (en).
+def format_money(amount_minor: int, currency: str, _locale: str | None = None, *, nbsp: bool = False) -> str:
+    """Human-readable amount in Russian style: ``179 ₽``, ``1 699,50 ₽``, ``100 ⭐``, ``12,50 $``.
 
     Whole amounts are shown without a fractional part. ``nbsp=True`` uses non-breaking spaces so that
-    Telegram never wraps the symbol away from the number.
+    Telegram never wraps the symbol away from the number. The third argument (an old locale) is ignored.
     """
     if isinstance(amount_minor, bool) or not isinstance(amount_minor, int):
         raise TypeError("amount_minor must be int")
     code = currency.upper()
     exp = exponent(code)
     space = "\N{NO-BREAK SPACE}" if nbsp else " "
-    english = locale.lower().startswith("en")
 
     sign = "-" if amount_minor < 0 else ""
     units, frac = divmod(abs(amount_minor), 10**exp) if exp else (abs(amount_minor), 0)
-    if english:
-        number = _group(str(units), ",")
-        if frac:
-            number += "." + str(frac).rjust(exp, "0")
-    else:
-        number = _group(str(units), space)
-        if frac:
-            number += "," + str(frac).rjust(exp, "0")
+    number = _group(str(units), space)
+    if frac:
+        number += "," + str(frac).rjust(exp, "0")
 
     symbol = CURRENCY_SYMBOL.get(code, code)
-    if english and code in _PREFIX_SYMBOLS_EN:
-        return f"{sign}{symbol}{number}"
     return f"{sign}{number}{space}{symbol}"
 
 

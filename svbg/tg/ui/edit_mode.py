@@ -76,17 +76,12 @@ def _cb(screen: str, arg: str | None = None) -> str:
     return codec.encode(screen, codec.ACTION_OPEN, arg)
 
 
-def service_row(entry: ScreenEntry, lang: str = "ru") -> list[InlineKeyboardButton]:
+def service_row(entry: ScreenEntry, _lang: str = "ru") -> list[InlineKeyboardButton]:
     sid = str(entry.id)
-    en = lang == "en"
     return [
-        InlineKeyboardButton(text="✏️ Screen" if en else "✏️ Экран", callback_data=_cb(SCREEN_EDITOR, sid)),
-        InlineKeyboardButton(
-            text="➕ Button" if en else "➕ Кнопка", callback_data=codec.encode(ACTIONS, "nb", sid)
-        ),
-        InlineKeyboardButton(
-            text="👁 Seen as…" if en else "👁 Как видит…", callback_data=_cb(SCREEN_PREVIEW, sid)
-        ),
+        InlineKeyboardButton(text="✏️ Экран", callback_data=_cb(SCREEN_EDITOR, sid)),
+        InlineKeyboardButton(text="➕ Кнопка", callback_data=codec.encode(ACTIONS, "nb", sid)),
+        InlineKeyboardButton(text="👁 Как видит…", callback_data=_cb(SCREEN_PREVIEW, sid)),
     ]
 
 

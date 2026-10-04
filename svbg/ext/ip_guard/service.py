@@ -1275,9 +1275,7 @@ class IpGuardService:
             return
         card, keyboard, pin = rendered
         if hasattr(self.admin_chat, "post_report"):  # a rich message where the chat takes them
-            result = await self.admin_chat.post_report(
-                TOPIC, card, buttons=keyboard, card_ref=ref, wait=True
-            )
+            result = await self.admin_chat.post_report(TOPIC, card, buttons=keyboard, card_ref=ref, wait=True)
         else:
             result = await self.admin_chat.post(
                 TOPIC, card.html(), html=True, buttons=keyboard, card_ref=ref, wait=True
@@ -1325,9 +1323,7 @@ class IpGuardService:
         async with self.db.tx() as conn:
             await conn.execute(sa.update(table).where(table.c.id == ident).values(pinned=want))
 
-    async def render_card(
-        self, ref: str
-    ) -> tuple[Report, list[list[InlineKeyboardButton]], bool] | None:
+    async def render_card(self, ref: str) -> tuple[Report, list[list[InlineKeyboardButton]], bool] | None:
         """``(report, keyboard, pinned?)`` of a card, from the database."""
         kind, ident = _split_ref(ref)
         if ident is None:
@@ -1471,7 +1467,6 @@ class IpGuardService:
                         b.new_paid_until,
                         b.unblock_mode,
                         users.c.telegram_id,
-                        users.c.language,
                     )
                     .select_from(ip_guard_blocks.outerjoin(users, users.c.id == b.user_id))
                     .where(b.id == block_id)
@@ -1501,31 +1496,26 @@ class IpGuardService:
                 await self._card(conn, f"block:{block_id}")
 
     def user_message(self, event: str, row: Any) -> tuple[str, InlineKeyboardMarkup]:
-        from svbg.billing.texts import lang_of
         from svbg.tg.ui.renderer import nav_button
 
-        lang = lang_of(getattr(row, "language", None))
         support = self.support_url()
         rows: list[list[InlineKeyboardButton]] = []
         if event == "blocked":
-            text = texts.user_t("user_blocked", lang).format(n=int(row.ip_count or 0))
+            text = texts.user_t("user_blocked").format(n=int(row.ip_count or 0))
             if support:
-                rows.append([InlineKeyboardButton(text=texts.user_t("btn_support", lang), url=support)])
-            rows.append(
-                [InlineKeyboardButton(text=texts.user_t("btn_close", lang), callback_data="ipg:close")]
-            )
+                rows.append([InlineKeyboardButton(text=texts.user_t("btn_support"), url=support)])
+            rows.append([InlineKeyboardButton(text=texts.user_t("btn_close"), callback_data="ipg:close")])
         else:
             text = texts.unblock_user_text(
                 str(row.outcome or "active"),
                 left=int(row.frozen_seconds or 0),
                 until=row.new_paid_until,
                 revoked=row.unblock_mode == "revoke",
-                lang=lang,
             )
             if row.outcome == "active":
-                rows.append([nav_button(texts.user_t("btn_my_sub", lang), "home")])
+                rows.append([nav_button(texts.user_t("btn_my_sub"), "home")])
             else:
-                rows.append([nav_button(texts.user_t("btn_renew", lang), "buy", style="success")])
+                rows.append([nav_button(texts.user_t("btn_renew"), "buy", style="success")])
         return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def purge(self) -> int:

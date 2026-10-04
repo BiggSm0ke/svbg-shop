@@ -32,7 +32,9 @@ async def test_screen_clicks_stay_within_two_sql_and_no_panel_http(pg_dsn: str) 
             "balance": "v1:bal:o",
             "topup": "v1:topup:o:49900",
             "connect": "v1:connect:o",
-            "lang": "v1:lang:o",
+            "profile": "v1:profile:o",
+            "sub": "v1:sub:o",
+            "old_lang": "v1:lang:o",  # the language picker is gone: home
         }
         report: dict[str, tuple[int, int]] = {}
         for name, data in clicks.items():
@@ -49,7 +51,7 @@ async def test_devices_screen_reads_the_cache_not_the_panel(pg_dsn: str) -> None
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user(balance=20_000)
         await env.open(tg)
-        await env.press(tg, "Подписка")
+        await env.press(tg, "Профиль")
         await env.press(tg, "Купить подписку")
         await env.press(tg, "1 мес.")
         await env.press(tg, "Оплатить")
@@ -105,7 +107,7 @@ async def test_someone_elses_order_cannot_be_paid(pg_dsn: str) -> None:
         _victim, tg_v = await env.new_user(balance=20_000)
         thief, tg_t = await env.new_user(balance=20_000)
         await env.open(tg_v)
-        await env.press(tg_v, "Подписка")
+        await env.press(tg_v, "Профиль")
         await env.press(tg_v, "Купить подписку")
         await env.press(tg_v, "1 мес.")
         order_id = (await env.rows("select id from orders order by id desc limit 1"))[0]["id"]
@@ -120,7 +122,7 @@ async def test_double_tap_on_pay_debits_once(pg_dsn: str) -> None:
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user(balance=20_000)
         await env.open(tg)
-        await env.press(tg, "Подписка")
+        await env.press(tg, "Профиль")
         await env.press(tg, "Купить подписку")
         checkout = await env.press(tg, "1 мес.")
         data = checkout.data("Оплатить")
@@ -160,7 +162,7 @@ async def test_panel_down_shows_connecting_then_the_same_message_gets_connect(pg
     async with build_user_env(pg_dsn) as env:
         uid, tg = await env.new_user(balance=20_000)
         await env.open(tg)
-        await env.press(tg, "Подписка")
+        await env.press(tg, "Профиль")
         await env.press(tg, "Купить подписку")
         checkout = await env.press(tg, "1 мес.")
         env.b.s.panel.inject("503", times=None)

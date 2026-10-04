@@ -80,7 +80,7 @@ async def buy_month(shop: Shop, telegram_id: int) -> Any:
     person = chat(shop, telegram_id)
     await person.start()
     await shop.fund(telegram_id, 17_900)
-    await person.press("Подписка", expect="📱 Подписка")
+    await person.press("Профиль", expect="👤 Профиль")
     await person.press("Купить подписку", expect="Выберите срок")
     await person.press("1 мес.", expect="Спишем с баланса")
     await person.press("Оплатить 179")

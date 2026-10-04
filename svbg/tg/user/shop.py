@@ -51,7 +51,6 @@ from svbg.billing.tables import orders
 from svbg.core.clock import now
 from svbg.core.money import exponent, parse_money
 from svbg.payments.tables import payments as payments_t
-from svbg.subscriptions.hold import localize_spend
 from svbg.tg.ui import codec
 from svbg.tg.ui.forms import Field, Form, ValidationError
 from svbg.tg.ui.renderer import nav_button
@@ -116,7 +115,7 @@ class ShopScreens(Base):
                 (
                     Field(
                         "amount",
-                        {"ru": t("ru", "amount_prompt"), "en": t("en", "amount_prompt")},
+                        t(None, "amount_prompt"),
                         self._amount,
                     ),
                 ),
@@ -133,8 +132,8 @@ class ShopScreens(Base):
         except ValueError:
             return 100
 
-    def money(self, amount_minor: int, lang: str, currency: str | None = None) -> str:
-        return money(amount_minor, currency or self.currency, lang)
+    def money(self, amount_minor: int, _lang: str | None = None, currency: str | None = None) -> str:
+        return money(amount_minor, currency or self.currency)
 
     def _snapshot(self) -> Any:
         catalog = self.deps.catalog
@@ -157,7 +156,7 @@ class ShopScreens(Base):
         if promo is None:
             return []
         try:
-            return list(await promo.checkout_discounts(user_id, plan_id, lang))
+            return list(await promo.checkout_discounts(user_id, plan_id))
         except Exception:
             log.exception("promo discounts failed for user %s", user_id)
             return []
@@ -178,9 +177,7 @@ class ShopScreens(Base):
                 )
                 if not isinstance(snapshot, Mapping):
                     return None
-                return await promo.claim(
-                    conn, order_id=order_id, user_id=user_id, snapshot=snapshot, lang=lang
-                )
+                return await promo.claim(conn, order_id=order_id, user_id=user_id, snapshot=snapshot)
         except Exception:
             log.exception("promo claim failed for order %s", order_id)
             return None
@@ -300,7 +297,7 @@ class ShopScreens(Base):
             if plan.unlimited_traffic
             else f"{plan.traffic_bytes / 1024**3:g} GB",
         }
-        back = self.back(lang, seeds.SUB if single else seeds.BUY)
+        back = self.back(lang, seeds.PROFILE if single else seeds.BUY)
         return screen_view(ctx, seeds.BUY_PLAN, values, top=rows, bottom=[back])
 
     # ------------------------------------------------------------------ checkout
@@ -469,7 +466,7 @@ class ShopScreens(Base):
             # billing edits this message into «✅ Оплачено + 🔗 Подключиться» (after this screen is drawn)
             return screen_view(ctx, seeds.PAY_WAIT, bottom=[self.menu(lang)])
         if res.outcome == "denied":
-            text = localize_spend(res.text, lang) or t(lang, "error_generic")
+            text = res.text or t(lang, "error_generic")
             return View(text=text, keyboard=[*self.support_row(lang), self.menu(lang)])
         return None
 
@@ -610,7 +607,7 @@ class ShopScreens(Base):
             except BillingError as e:
                 return self._invoice_error(ctx, e.localized(lang), parent, amount)
             except CheckoutError as e:  # includes SpendDeniedError (frozen / banned)
-                return self._invoice_error(ctx, localize_spend(e.localized(lang), lang), parent, amount)
+                return self._invoice_error(ctx, e.localized(lang), parent, amount)
         return await self._invoice_view(ctx, result, parent, amount)
 
     @staticmethod
@@ -731,8 +728,7 @@ class ShopScreens(Base):
     async def _invoice_link(ctx: ScreenCtx, invoice: Mapping[str, Any]) -> str | None:
         """``createInvoiceLink`` from the plugin's invoice parameters (the bot owns the token)."""
         currency = str(invoice.get("currency") or "XTR")
-        default_title = "Balance top-up" if ctx.lang == "en" else "Пополнение баланса"
-        title = str(invoice.get("title") or default_title)[:32]
+        title = str(invoice.get("title") or "Пополнение баланса")[:32]
         raw_prices = invoice.get("prices")
         prices: list[LabeledPrice] = []
         if isinstance(raw_prices, list):
@@ -847,13 +843,10 @@ class ShopScreens(Base):
         try:
             amount = parse_money(value, self.currency)
         except ValueError:
-            raise ValidationError(t("ru", "amount_bad"), t("en", "amount_bad")) from None
+            raise ValidationError(t(None, "amount_bad")) from None
         lo, hi = self._limits()
         if not lo <= amount <= hi:
-            raise ValidationError(
-                t("ru", "amount_range", min=self.money(lo, "ru"), max=self.money(hi, "ru")),
-                t("en", "amount_range", min=self.money(lo, "en"), max=self.money(hi, "en")),
-            )
+            raise ValidationError(t(None, "amount_range", min=self.money(lo), max=self.money(hi)))
         return amount
 
     async def _amount_done(self, ctx: ScreenCtx, data: dict[str, Any]) -> HandlerResult:

@@ -80,7 +80,7 @@ from svbg.core.settings import (
 from svbg.core.settings import values as setting_values
 from svbg.core.settings.bootstrap import file_values, read_bootstrap
 from svbg.core.settings.envtext import HEADER, comment_lines
-from svbg.core.settings.registry import PAYMENTS_SECTION
+from svbg.core.settings.registry import PAYMENTS_SECTION, RETIRED_KEYS
 from svbg.core.tables import admin_audit
 from svbg.jobs.worker import PermanentJobError, RetryJob
 from svbg.remnawave import ErrorKind, PanelNotConfiguredError, RemnawaveComponent, RemnawaveError
@@ -624,6 +624,11 @@ class PanelEventRelay:
 
 
 def _rename_aliases(doc: EnvDocument, registry: Registry) -> None:
+    """Old key names → canonical ones; lines of keys the bot no longer has (``RETIRED_KEYS``) are dropped."""
+    present = {line.key for line in doc.lines if line.kind in ("kv", "invalid")}
+    for key in RETIRED_KEYS & present:
+        if registry.find(key) is None:
+            doc.remove(key)
     present = {line.key for line in doc.lines if line.kind == "kv"}
     for defn in registry.all():
         for alias in defn.aliases:
@@ -1011,7 +1016,7 @@ class App:
         # media_root: the default banner (a placeholder picture on every screen until the owner removes it)
         content = ContentStore(
             db,
-            default_lang=str(snap["DEFAULT_LANGUAGE"] or "ru"),
+            default_lang="ru",
             media_root=self.boot.data_dir / "media",
             preview_available=lambda: bool(self._public_url()),
         )
@@ -1602,7 +1607,7 @@ class App:
             await self.referral.captcha_passed(user.user_id)
 
     async def _after_onboarding(self, ctx: Any) -> Any:
-        """Resume point after the channel gate / language choice (decision C9): the consent page first, then
+        """Resume point after the channel gate (decision C9): the consent page first, then
         the deep-link intent kept at ``/start``; ``None`` → the step's own screen."""
         if self._pages_wired and self.pages is not None:
             page = await self.pages.needs_consent(ctx.user.user_id)

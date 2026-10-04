@@ -294,6 +294,29 @@ async def test_alias_is_read_and_line_rewritten(
     assert "Раньше называлось: TRIAL_PERIOD_DAYS" in read(env_path)
 
 
+async def test_retired_language_lines_are_dropped_without_errors(
+    make_service: ServiceFactory, make_mirror: MirrorFactory, env_path: Path, db: ShimDatabase
+) -> None:
+    """The bot is Russian-only: an old .env with the language keys starts fine and loses those lines."""
+    env_path.parent.mkdir(parents=True)
+    env_path.write_text(
+        f"BOT_TOKEN={TOKEN}\nDEFAULT_LANGUAGE=en\nI18N_AVAILABLE=ru,en\nI18N_ASK_ON_START=true\nMY_OWN=1\n",
+        encoding="utf-8",
+    )
+    await db.fetch(
+        "insert into settings (key, value, source) values ('DEFAULT_LANGUAGE', $1::jsonb, 'bot') returning 1",
+        '{"v": "en"}',
+    )
+    notices: list[MirrorNotice] = []
+    svc = await make_service()
+    await make_mirror(svc, notices=notices)
+    assert "DEFAULT_LANGUAGE" not in svc.current() and not svc.problems
+    doc = EnvDocument.parse(read(env_path))
+    assert not {"DEFAULT_LANGUAGE", "I18N_AVAILABLE", "I18N_ASK_ON_START"} & set(doc.as_dict())
+    assert doc.get("MY_OWN") == "1" and doc.get("BOT_TOKEN") == TOKEN  # the owner's own lines stay
+    assert not [n for n in notices if n.kind in ("invalid", "conflict")]
+
+
 async def test_removed_line_restored_and_blank_resets(
     make_service: ServiceFactory, make_mirror: MirrorFactory, env_path: Path
 ) -> None:

@@ -58,9 +58,12 @@ log = logging.getLogger("svbg.tg.admin.payments")
 
 SCREEN_LIST: Final = "apay"
 SCREEN_CARD: Final = "apay.c"
+ADD_PAGE: Final = 12  # cash desks per page of «➕ Подключить кассу» (two per row)
 SCREEN_RECEIPTS: Final = "apay.rc"
 ACTIONS: Final = "apaya"
 SETTING_CARD: Final = "set.key"  # svbg.tg.admin.settings.SCREEN_KEY
+SLICE_SCREEN: Final = "set.v"  # svbg.tg.admin.slices.SCREEN
+PAY_SETTINGS_SLICE: Final = "pay.cfg"  # svbg.tg.admin.slices.PAY_SETTINGS
 USER_CARD: Final = "au"  # svbg.tg.admin.users.screens.SCREEN_CARD
 PERM_CONFIRM: Final = "payments.confirm"
 DOCS_URL: Final = "https://github.com/BiggSm0ke/svbg-shop/blob/main/docs/providers/{slug}.md"
@@ -70,16 +73,15 @@ _TITLE_RE: Final = re.compile(r"^«(.+?)»: ")
 _NOTES_MAX: Final = 256
 
 _T: Final[dict[str, str]] = {
-    "list_title": "🏦 <b>Кассы</b>",
     "list_on": "Включены: {n} из {total}.",
     "list_none": "Пока ни одна касса не включена.",
     "list_hint": "Нажмите на кассу, чтобы проверить ключи и адрес для уведомлений. Новую подключите кнопкой "
     "«➕ Подключить кассу».",
-    "add_title": "➕ <b>Подключить кассу</b>",
+    "add_name": "➕ Подключить кассу",
     "add_hint": "Выберите кассу. Дальше бот попросит ключи из её личного кабинета.",
     "b_add": "➕ Подключить кассу",
+    "b_settings": "⚙️ Настройки",
     "b_back_list": "⬅️ Кассы",
-    "card_title": "🏦 <b>{title}</b>",
     "now": "Сейчас: {state}",
     "st_off": "⏸ выключена",
     "st_ok": "✅ работает",
@@ -114,7 +116,6 @@ _T: Final[dict[str, str]] = {
     "failed": "Не получилось: {reason}",
     "not_found": "Такой кассы нет",
     "db_down": "База данных не отвечает, попробуйте позже",
-    "rc_title": "🧾 <b>Ждут подтверждения</b>",
     "rc_hint": "Чеки ручной оплаты, по которым ещё нет решения. Подтвердить или отклонить чек можно в его "
     "карточке в админ-группе.",
     "rc_empty": "Сейчас таких чеков нет.",
@@ -285,29 +286,31 @@ class PaymentScreens:
     # ------------------------------------------------------------ list
 
     async def _list_screen(self, ctx: ScreenCtx, arg: Any) -> View:
-        adding = arg == "add"
+        head, _, page_s = arg.partition(":") if isinstance(arg, str) else ("", "", "")
+        adding = head == "add"  # «add» or «add:<page>»
         slugs = self.slugs()
         on = [s for s in slugs if self._enabled(s)]
         rows: list[list[InlineKeyboardButton]] = []
         if adding:
-            lines = [_T["add_title"], _esc(nav.breadcrumb(SCREEN_LIST) + " › ➕"), "", _T["add_hint"]]
-            pair: list[InlineKeyboardButton] = []
-            for slug in slugs:
-                if slug in on:
-                    continue
-                desk = self.desk(slug)
-                if desk is None:
-                    continue
-                pair.append(nav_button(_cut(desk.title, 30), SCREEN_CARD, arg=slug))
-                if len(pair) == 2:
-                    rows.append(pair)
-                    pair = []
-            if pair:
-                rows.append(pair)
-            rows.append([nav_button(_T["b_back_list"], SCREEN_LIST), nav_button("🛠 Админка", nav.ROOT)])
+            desks = [d for d in (self.desk(slug) for slug in slugs if slug not in on) if d is not None]
+            pages = max(1, -(-len(desks) // ADD_PAGE))
+            page = min(int(page_s) if page_s.isdigit() and len(page_s) < 4 else 0, pages - 1)
+            lines = [nav.header(SCREEN_CARD, _T["add_name"]), "", _T["add_hint"]]
+            chunk = desks[page * ADD_PAGE : (page + 1) * ADD_PAGE]
+            buttons = [nav_button(_cut(d.title, 30), SCREEN_CARD, arg=d.slug) for d in chunk]
+            rows += [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
+            if pages > 1:
+                pager: list[InlineKeyboardButton] = []
+                if page > 0:
+                    pager.append(nav_button("◀️", SCREEN_LIST, arg=f"add:{page - 1}"))
+                pager.append(nav_button(f"{page + 1} из {pages}", SCREEN_LIST, arg=f"add:{page}"))
+                if page < pages - 1:
+                    pager.append(nav_button("▶️", SCREEN_LIST, arg=f"add:{page + 1}"))
+                rows.append(pager)
+            rows.append(nav.with_admin([nav_button(_T["b_back_list"], SCREEN_LIST)]))
             return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
         health = await self._health(on)
-        lines = [_T["list_title"], _esc(nav.breadcrumb(SCREEN_LIST)), ""]
+        lines = [nav.header(SCREEN_LIST), ""]
         lines.append(_T["list_on"].format(n=len(on), total=len(slugs)) if on else _T["list_none"])
         lines.append(_T["list_hint"])
         for slug in on:
@@ -317,11 +320,8 @@ class PaymentScreens:
             icon = self._icon(self._state(slug, health.get(slug)))
             rows.append([nav_button(_cut(f"{icon} {desk.title}", 60), SCREEN_CARD, arg=slug)])
         rows.append([nav_button(_T["b_add"], SCREEN_LIST, arg="add")])
-        skew = self.registry.find("PAY_CLOCK_SKEW_ALERT_COUNT")
-        if skew is not None:
-            value = self.settings.current().get(skew.key)
-            label = _cut(f"⚙️ {skew.title}: {value}", 60)
-            rows.append([nav_button(label, SETTING_CARD, arg=skew.key)])
+        if ctx.user.role == "owner" and nav.has_screen(self.router, SLICE_SCREEN):
+            rows[-1].append(nav_button(_T["b_settings"], SLICE_SCREEN, arg=PAY_SETTINGS_SLICE))
         rows.append(nav.back_row(SCREEN_LIST))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
@@ -341,11 +341,7 @@ class PaymentScreens:
         snap = self.settings.current()
         health = await self._health([desk.slug])
         state = self._state(desk.slug, health.get(desk.slug))
-        lines = [
-            _T["card_title"].format(title=_esc(desk.title)),
-            _esc(nav.breadcrumb(SCREEN_CARD, f"🏦 {desk.title}")),
-            "",
-        ]
+        lines = [nav.header(SCREEN_CARD, f"🏦 {desk.title}"), ""]
         if note:
             lines += [note, ""]
         lines.append(_T["now"].format(state=state))
@@ -489,7 +485,7 @@ class PaymentScreens:
         from svbg.billing.tables import manual_receipts
         from svbg.core.tables import users
 
-        lines = [_T["rc_title"], _esc(nav.breadcrumb(SCREEN_RECEIPTS)), "", _T["rc_hint"], ""]
+        lines = [nav.header(SCREEN_RECEIPTS), "", _T["rc_hint"], ""]
         rows: list[list[InlineKeyboardButton]] = []
         found: list[Any] = []
         if self.db is not None:

@@ -76,20 +76,20 @@ def test_text_blocks_validate_entities_in_utf16() -> None:
         {"ru": {"text": "👋 Hi", "entities": [{"type": "bold", "offset": 0, "length": 5}]}}
     )
     assert blocks["ru"].entities[0]["length"] == 5
-    with pytest.raises(ContentError, match="outside the text"):
+    with pytest.raises(ContentError, match="за пределы текста"):
         parse_text_blocks({"ru": {"text": "👋 Hi", "entities": [{"type": "bold", "offset": 0, "length": 6}]}})
 
 
 def test_text_blocks_reject_bad_values() -> None:
-    with pytest.raises(ContentError, match="language"):
+    with pytest.raises(ContentError, match="код языка"):
         parse_text_blocks({"Russian!": "x"})
-    with pytest.raises(ContentError, match="entity type"):
+    with pytest.raises(ContentError, match="тип форматирования"):
         parse_text_blocks({"ru": {"text": "abc", "entities": [{"type": "evil", "offset": 0, "length": 1}]}})
-    with pytest.raises(ContentError, match="custom emoji"):
+    with pytest.raises(ContentError, match="премиум-эмодзи"):
         parse_text_blocks(
             {"ru": {"text": "abc", "entities": [{"type": "custom_emoji", "offset": 0, "length": 1}]}}
         )
-    with pytest.raises(ContentError, match="URL"):
+    with pytest.raises(ContentError, match="ссылк"):
         parse_text_blocks(
             {"ru": {"text": "abc", "entities": [{"type": "text_link", "offset": 0, "length": 1, "url": "x"}]}}
         )
@@ -136,9 +136,9 @@ def test_button_validates_style_and_icon() -> None:
     assert b.style == "success" and b.row == 2
 
 
-def test_screen_text_language_fallback() -> None:
+def test_screen_text_is_russian_with_a_fallback() -> None:
     s = Screen.from_row({"id": 1, "code": "x", "kind": "custom", "body": {"ru": "привет", "en": "hello"}})
-    assert s.text("en").text == "hello"
+    assert s.text("en").text == "привет"  # an old English text stays in the row unused
     assert s.text("de").text == "привет"
     only_en = Screen.from_row({"id": 2, "code": "y", "body": {"en": "hello"}})
     assert only_en.text("de").text == "hello"

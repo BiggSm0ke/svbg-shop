@@ -13,10 +13,9 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-__all__ = ["SUPPORTED_LANGS", "UserDirectory", "UserPath", "UserPathDeps", "build_start_router"]
+__all__ = ["UserDirectory", "UserPath", "UserPathDeps", "build_start_router"]
 
 _LAZY: dict[str, str] = {
-    "SUPPORTED_LANGS": "svbg.tg.user.directory",
     "UserDirectory": "svbg.tg.user.directory",
     "build_start_router": "svbg.tg.user.start",
     "UserPath": "svbg.tg.user.wiring",

@@ -52,12 +52,11 @@ _NAME_RE: Final = re.compile(r"^[a-z][a-z0-9_.]{0,47}$")
 
 
 class ValidationError(ValueError):
-    """Raised by validators; ``str(error)`` is shown to the user as is (keep it short, Russian); ``en`` is the
-    same in English (shown to English-speaking users; ``None`` — the Russian text)."""
+    """Raised by validators; ``str(error)`` is shown to the user as is (keep it short, Russian). A second
+    argument (an old English translation) is accepted and ignored."""
 
-    def __init__(self, text: str = "", en: str | None = None) -> None:
+    def __init__(self, text: str = "", _unused: str | None = None) -> None:
         super().__init__(text)
-        self.en = en
 
 
 Validator = Callable[[str], Any]
@@ -69,14 +68,9 @@ def text(*, min_len: int = 1, max_len: int = 1024, strip: bool = True) -> Valida
     def check(value: str) -> str:
         v = value.strip() if strip else value
         if len(v) < min_len:
-            raise ValidationError(
-                "Слишком коротко" if min_len > 1 else "Пустой ответ",
-                "Too short" if min_len > 1 else "Empty answer",
-            )
+            raise ValidationError("Слишком коротко" if min_len > 1 else "Пустой ответ")
         if len(v) > max_len:
-            raise ValidationError(
-                f"Слишком длинно: максимум {max_len} символов", f"Too long: at most {max_len} characters"
-            )
+            raise ValidationError(f"Слишком длинно: максимум {max_len} символов")
         return v
 
     return check
@@ -86,12 +80,12 @@ def integer(*, min_value: int | None = None, max_value: int | None = None) -> Va
     def check(value: str) -> int:
         raw = value.strip().replace(" ", "").replace(" ", "")
         if not re.fullmatch(r"[+-]?\d{1,18}", raw):
-            raise ValidationError("Нужно целое число", "A whole number is needed")
+            raise ValidationError("Нужно целое число")
         n = int(raw)
         if min_value is not None and n < min_value:
-            raise ValidationError(f"Минимум {min_value}", f"Minimum {min_value}")
+            raise ValidationError(f"Минимум {min_value}")
         if max_value is not None and n > max_value:
-            raise ValidationError(f"Максимум {max_value}", f"Maximum {max_value}")
+            raise ValidationError(f"Максимум {max_value}")
         return n
 
     return check
@@ -100,17 +94,15 @@ def integer(*, min_value: int | None = None, max_value: int | None = None) -> Va
 @dataclass(frozen=True, slots=True)
 class Field:
     name: str
-    prompt: Mapping[str, str] | str  # by language, or one string
+    prompt: Mapping[str, str] | str  # one string (an old ``{"ru": …}`` table still works)
     validator: Validator | None = None  # default: non-empty text
     optional: bool = False
     secret: bool = False
 
-    def prompt_for(self, lang: str) -> str:
+    def prompt_for(self, _lang: str | None = None) -> str:
         if isinstance(self.prompt, str):
             return self.prompt
-        return (
-            self.prompt.get(lang) or self.prompt.get(texts.DEFAULT_LANG) or next(iter(self.prompt.values()))
-        )
+        return self.prompt.get(texts.DEFAULT_LANG) or next(iter(self.prompt.values()))
 
 
 FormDone = Callable[["ScreenCtx", dict[str, Any]], Awaitable["HandlerResult"]]
@@ -193,11 +185,6 @@ class StepResult:
     done: bool = False
     error: str | None = None
     secret: dict[str, Any] | None = None  # secret values for on_done only (never persisted)
-    error_en: str | None = None  # ``error`` in English (``None``: no translation)
-
-    def error_for(self, lang: str | None) -> str | None:
-        """``error`` in the user's language (Russian fallback)."""
-        return (self.error_en or self.error) if lang == "en" and self.error is not None else self.error
 
 
 def start_state(form: Form, initial: Mapping[str, Any] | None = None) -> FormState:
@@ -216,16 +203,12 @@ def advance(form: Form, state: FormState, value: str) -> StepResult:
         return StepResult(state, done=True)
     f = form.fields[state.step]
     if len(value) > MAX_INPUT:
-        return StepResult(
-            state,
-            error=f"Слишком длинно: максимум {MAX_INPUT} символов",
-            error_en=f"Too long: at most {MAX_INPUT} characters",
-        )
+        return StepResult(state, error=f"Слишком длинно: максимум {MAX_INPUT} символов")
     validator = f.validator or _DEFAULT_VALIDATOR
     try:
         parsed = validator(value)
     except ValidationError as e:
-        return StepResult(state, error=str(e) or None, error_en=e.en)
+        return StepResult(state, error=str(e) or None)
     except (ValueError, TypeError):
         return StepResult(state, error="")  # router shows the generic "не понял" message
     if f.secret:
@@ -240,7 +223,7 @@ def skip(form: Form, state: FormState) -> StepResult:
         return StepResult(state, done=True)
     f = form.fields[state.step]
     if not f.optional:
-        return StepResult(state, error="Это поле обязательно", error_en="This field is required")
+        return StepResult(state, error="Это поле обязательно")
     if not f.secret:
         state.data[f.name] = None
     return _next(form, state)

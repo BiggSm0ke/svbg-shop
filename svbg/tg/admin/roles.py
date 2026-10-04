@@ -145,10 +145,9 @@ LABELS: Final[dict[str, str]] = {
 }
 
 _T: Final[dict[str, str]] = {
-    "list_title": "👮 <b>Команда</b>",
     "list_hint": "Нажмите на человека, чтобы сменить или убрать роль. Что можно каждой роли, настраивается "
     "в «🎭 Роли».",
-    "configured": "Владельцы из настроек (OWNER_IDS): {ids}",
+    "configured": "Владельцы из настроек: {ids}",
     "staff_empty": "Кроме владельца в команде пока никого.",
     "more": "И ещё {n}.",
     "b_add": "➕ Добавить человека",
@@ -165,7 +164,7 @@ _T: Final[dict[str, str]] = {
     "no_roles": "Ролей пока нет, создайте первую в «🎭 Роли».",
     "self": "Это вы. Свою роль здесь поменять нельзя.",
     "is_owner": "Это владелец, его роль меняет только владелец.",
-    "configured_owner": "Владелец из настроек (OWNER_IDS), меняется только там.",
+    "configured_owner": "Владелец из настроек («⚙️ Лимиты команды»), меняется только там.",
     "banned": "Заблокирован. Чтобы дать роль, сначала разблокируйте.",
     "wider": "У человека есть права, которых нет у вас, поэтому менять его роль нельзя.",
     "b_remove": "🚫 Убрать из команды",
@@ -181,11 +180,10 @@ _T: Final[dict[str, str]] = {
     "настройки. Снять его сможет только другой владелец.",
     "yes": "✅ Да, сделать владельцем",
     "no": "⬅️ Нет",
-    "to_card": "⬅️ К карточке",
+    "to_card": "👤 Карточка",
     "to_list": "⬅️ Команда",
     "not_found": "Пользователь не найден",
     "no_name": "без имени",
-    "roles_title": "🎭 <b>Роли</b>",
     "roles_hint": "У человека одна роль. Права роли меняются сразу у всех, у кого она есть.",
     "roles_empty": "Ролей пока нет.",
     "b_new": "➕ Новая роль",
@@ -411,7 +409,7 @@ class RoleScreens:
         async with self.db.read() as conn:
             staff = await roles.staff_list(conn)
             names = {r.id: r.name for r in await staff_roles.list_roles(conn)}
-        lines = [_T["list_title"], ""]
+        lines = [nav.header(SCREEN_LIST), ""]
         if note:
             lines += [note, ""]
         configured = sorted(self.configured_owners())
@@ -451,7 +449,7 @@ class RoleScreens:
         return View(
             text="\n".join(lines),
             parse_mode="HTML",
-            keyboard=[[nav_button(_T["to_list"], SCREEN_LIST)]],
+            keyboard=[nav.with_admin([nav_button(_T["to_list"], SCREEN_LIST)])],
         )
 
     def arm(self, user: UserCtx) -> None:
@@ -579,11 +577,12 @@ class RoleScreens:
         async with self.db.read() as conn:
             target = await staff_roles.get_target(conn, uid)
             all_roles = await staff_roles.list_roles(conn)
-        back = [nav_button(_T["to_list"], SCREEN_LIST)]
+        back = nav.with_admin([nav_button(_T["to_list"], SCREEN_LIST)])
         if target is None:
             return View(text=_T["not_found"], keyboard=[back])
+        card: list[InlineKeyboardButton] = []
         if nav.has_screen(self.router, SCREEN_CARD) and nav.can_open(self.router, ctx.user, SCREEN_CARD):
-            back.insert(0, nav_button(_T["to_card"], SCREEN_CARD, arg=str(uid)))
+            card.append(nav_button(_T["to_card"], SCREEN_CARD, arg=str(uid)))
         configured = target.telegram_id is not None and target.telegram_id in self.configured_owners()
         role_name = {r.id: r.name for r in all_roles}
         lines = [_T["edit_title"].format(who=_who(target.first_name, target.username, target.user_id)), ""]
@@ -614,6 +613,8 @@ class RoleScreens:
                 rows.append([nav_button(_T["b_remove"], ACTIONS, "rm", str(uid))])
             if viewer.is_owner and target.role != "owner" and not target.banned:
                 rows.append([nav_button(_T["b_owner"], SCREEN_CONFIRM, arg=str(uid))])
+        if card:
+            rows.append(card)
         rows.append(back)
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
@@ -742,7 +743,7 @@ class RoleScreens:
         _, note = _split(arg)
         async with self.db.read() as conn:
             all_roles = await staff_roles.list_roles(conn)
-        lines = [_T["roles_title"], ""]
+        lines = [nav.header(SCREEN_ROLES), ""]
         if note:
             lines += [note, ""]
         lines.append(_T["roles_hint"] if all_roles else _T["roles_empty"])
@@ -754,7 +755,7 @@ class RoleScreens:
             rows.append([nav_button(label[:64], SCREEN_ROLE, arg=str(r.id))])
         if len(all_roles) < staff_roles.MAX_ROLES:
             rows.append([nav_button(_T["b_new"], ACTIONS, "new")])
-        rows.append([nav_button(_T["to_list"], SCREEN_LIST)])
+        rows.append(nav.with_admin([nav_button(_T["to_list"], SCREEN_LIST)]))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     async def _load_role(self, rid: int) -> tuple[StaffRole | None, list[Target]]:
@@ -805,7 +806,7 @@ class RoleScreens:
                     nav_button(_T["b_delete"], SCREEN_DELETE, arg=str(rid)),
                 ]
             )
-        rows.append([nav_button(_T["to_roles"], SCREEN_ROLES)])
+        rows.append(nav.with_admin([nav_button(_T["to_roles"], SCREEN_ROLES)]))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     async def _group_screen(self, ctx: ScreenCtx, arg: Any) -> View | Redirect:
@@ -842,7 +843,7 @@ class RoleScreens:
             rows.append([nav_button((mark + label)[:64], ACTIONS, "tg", arg)])
         if not rows:
             lines += ["", _T["group_empty"]]
-        rows.append([nav_button(f"⬅️ {role.name}"[:64], SCREEN_ROLE, arg=str(rid))])
+        rows.append(nav.with_admin([nav_button(f"⬅️ {role.name}"[:48], SCREEN_ROLE, arg=str(rid))]))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     def _group_of(self, code: str) -> int:

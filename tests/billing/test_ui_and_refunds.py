@@ -108,24 +108,19 @@ async def test_waiting_for_the_panel_user_does_not_hold_the_subscription_queue(e
 # ------------------------------------------------------------------------------------------- language
 
 
-async def test_notices_follow_the_users_language(env: BillingEnv) -> None:
+async def test_notices_are_russian_even_for_an_old_english_user(env: BillingEnv) -> None:
     uid, order_id, ref = await _paid(env)
-    await env.db.raw("update users set language = 'en' where id = $1", uid)
+    await env.db.raw("update users set language = 'en' where id = $1", uid)  # left from the old bot
     await env.drain()
     shown = env.messenger.notice(ref)
-    assert isinstance(shown, Notice) and shown.text.startswith("✅ Paid!")
-    assert shown.buttons[0][0].text == "🔗 Connect" and shown.buttons[1][0].text == "Menu"
+    assert isinstance(shown, Notice) and shown.text.startswith("✅ Оплачено!")
+    assert shown.buttons[0][0].text == "🔗 Подключиться" and shown.buttons[1][0].text == "Меню"
     top = await env.topup(uid, 20_000)
     assert await env.paid_webhook(top.payment_id) == 200
     await env.drain()
     [(_chat, credited)] = env.messenger.sends
-    assert "added to your balance" in credited.text
+    assert "Зачислено" in credited.text
     assert (await env.order(order_id))["status"] == "fulfilled"
-    env.config["DEFAULT_LANGUAGE"] = "en"  # a user without a stored language gets the shop's default
-    other, _o, ref2 = await _paid(env)
-    await env.drain()
-    assert env.messenger.text(ref2).startswith("✅ Paid!")
-    del other
 
 
 # ------------------------------------------------------------------------------------------- refunds

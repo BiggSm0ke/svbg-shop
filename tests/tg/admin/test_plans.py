@@ -135,7 +135,7 @@ async def test_create_plan_and_put_it_on_sale(env: PEnv) -> None:
     assert any("30 дн. — 199,50 ₽" in lb for lb in env.labels())
     await env.press(ADMIN, "30 дн.")  # highlight
     assert "⭐ 30 дн." in " ".join(env.labels())
-    await env.press(ADMIN, "К тарифу")
+    await env.press(ADMIN, "⬅️ Тариф")
     await env.press(ADMIN, "В продажу")
     assert "🟢 В продаже" in env.text
     await reload(env)
@@ -179,7 +179,7 @@ async def test_rename_devices_addon_traffic_tag(env: PEnv) -> None:
     await env.press(OWNER, "Выключить доплату")
     await reload(env)
     assert env.catalog.snapshot.plan(pid).device_addon is None  # type: ignore[union-attr]
-    await env.press(OWNER, "К тарифу")
+    await env.press(OWNER, "⬅️ Тариф")
     await env.press(OWNER, "Трафик")
     await env.type(OWNER, "100")
     assert "📶 Трафик: 100 ГБ" in env.text

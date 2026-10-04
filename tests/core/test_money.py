@@ -58,9 +58,9 @@ def test_format_money_ru(amount: int, currency: str, expected: str) -> None:
     assert format_money(amount, currency) == expected
 
 
-def test_format_money_en_and_nbsp() -> None:
-    assert format_money(169950, "USD", "en") == "$1,699.50"
-    assert format_money(169950, "RUB", "en") == "1,699.50 ₽"
+def test_format_money_is_russian_only_and_nbsp() -> None:
+    assert format_money(169950, "USD", "en") == "1 699,50 $"  # an old locale argument is ignored
+    assert format_money(169950, "RUB", "en") == "1 699,50 ₽"
     assert format_money(169950, "RUB", nbsp=True) == f"1{NBSP}699,50{NBSP}₽"
 
 

@@ -55,7 +55,6 @@ __all__ = [
     "SCREEN_BUY_PLAN",
     "SCREEN_TOPUP",
     "TEXTS",
-    "TEXTS_EN",
     "Accepted",
     "Actor",
     "CatalogLike",
@@ -95,21 +94,10 @@ TEXTS: Final = {
     "promo_refused": "🎟 Промокод {code} не подошёл.",
     "promo_unavailable": "🎟 Промокоды сейчас недоступны.",
 }
-#: English of :data:`TEXTS` (same keys and placeholders).
-TEXTS_EN: Final = {
-    "link_gone": "⏳ This link is no longer valid.",
-    "plan_gone": "This plan is not available right now — here is what we have.",
-    "screen_gone": "The section from the link is not available — opened the menu.",
-    "promo_applied": "🎟 Promo code {code} applied ✓",
-    "promo_pending": "🎟 Promo code {code} will apply at checkout ✓",
-    "promo_refused": "🎟 Promo code {code} did not fit.",
-    "promo_unavailable": "🎟 Promo codes are not available right now.",
-}
 
 
-def _text(key: str, lang: str | None) -> str:
-    """``TEXTS[key]`` in ``lang`` (Russian fallback)."""
-    return TEXTS_EN[key] if lang == "en" else TEXTS[key]
+def _text(key: str) -> str:
+    return TEXTS[key]
 
 
 #: ``(user, chat_id, None)`` → the onboarding screen to show instead (channel gate …) or ``None``.
@@ -363,7 +351,7 @@ class DeeplinkService:
         return hook
 
     async def resume(self, user: UserCtx) -> Landing | None:
-        """Run the intent kept through onboarding (after the channel check, the language, the consent)."""
+        """Run the intent kept through onboarding (after the channel check and the consent)."""
         intent = await self._take(user.user_id)
         if intent is None:
             return None
@@ -479,7 +467,7 @@ class DeeplinkService:
             link = _row_to_link(row)
             first = not row["seen"]
             if link.unusable(now, seen=not first) is not None:
-                return Accepted(notice=_text("link_gone", user.lang))
+                return Accepted(notice=_text("link_gone"))
             hit = sa.insert(deeplink_hits).values(
                 link_id=link.id, payload=raw, kind="link", user_id=user.user_id, is_new=user.is_new, ts=now
             )
@@ -572,27 +560,25 @@ class DeeplinkService:
     async def _apply_promo(self, user: UserCtx, code: str) -> str:
         if self.promo is None:
             log.info("promo link %s ignored: the promo module is not connected", code)
-            return _text("promo_unavailable", user.lang)
+            return _text("promo_unavailable")
         outcome = await self._port(
             "promo.apply", self.promo.apply_from_link(user.user_id, code), user_id=user.user_id
         )
         if not isinstance(outcome, PromoOutcome):
-            return _text("promo_refused", user.lang).format(code=code)
-        if outcome.text and (user.lang != "en" or not outcome.text_en):
+            return _text("promo_refused").format(code=code)
+        if outcome.text:
             return outcome.text
-        if outcome.text_en:
-            return outcome.text_en
         key = {
             PromoStatus.APPLIED: "promo_applied",
             PromoStatus.PENDING: "promo_pending",
         }.get(outcome.status, "promo_refused")
-        return _text(key, user.lang).format(code=code)
+        return _text(key).format(code=code)
 
     def _target(self, user: UserCtx, intent: Intent) -> Landing:
         if intent.screen is not None:
             if self.can_open is not None and self._safe_can_open(user, intent.screen):
                 return Landing(intent.screen)
-            return Landing(HOME, notice=_text("screen_gone", user.lang))
+            return Landing(HOME, notice=_text("screen_gone"))
         if intent.plan is not None:
             return self._plan_landing(user, intent.plan, via_short_link=intent.link_id is not None)
         if intent.topup is not None:
@@ -633,10 +619,10 @@ class DeeplinkService:
             or getattr(plan, "is_trial", False)
             or getattr(plan, "broken_reason", None) is not None
         ):
-            return Landing(SCREEN_BUY, notice=_text("plan_gone", user.lang))
+            return Landing(SCREEN_BUY, notice=_text("plan_gone"))
         if getattr(plan, "availability", "all") == "link":
             if not via_short_link and value != str(plan.code):
-                return Landing(SCREEN_BUY, notice=_text("plan_gone", user.lang))
+                return Landing(SCREEN_BUY, notice=_text("plan_gone"))
             self._grant_plan(user.user_id, str(plan.code))
         return Landing(SCREEN_BUY_PLAN, str(plan.id))
 

@@ -182,18 +182,13 @@ async def load_subscription(conn: AsyncConnection, user: Any, view: Mapping[str,
     return None if row is None else {"frozen_seconds": int(row.hold_frozen_seconds or 0)}
 
 
-def _lang(call: SlotCall) -> str:
-    lang = getattr(call.user, "lang", "ru")
-    return lang if lang in ("ru", "en") else "ru"
-
-
 def _support_button(call: SlotCall) -> tuple[SlotButton, ...]:
     try:
         url = call.module.config().get("SUPPORT_URL")
     except Exception:  # noqa: BLE001 - no button rather than a broken screen
         url = None
     if isinstance(url, str) and url.startswith(("https://", "tg://")):
-        return (SlotButton(texts.user_t("btn_support", _lang(call)), url=url),)
+        return (SlotButton(texts.user_t("btn_support"), url=url),)
     return ()
 
 
@@ -202,10 +197,7 @@ def render_banner(call: SlotCall) -> SlotResult | None:
     model = call.model
     if not model:
         return None
-    lang = _lang(call)
-    text = texts.user_t("banner", lang).format(
-        left=texts.fmt_duration(int(model.get("frozen_seconds") or 0), lang)
-    )
+    text = texts.user_t("banner").format(left=texts.fmt_duration(int(model.get("frozen_seconds") or 0)))
     return SlotResult(lines=(text,), buttons=_support_button(call), banner=True)
 
 
@@ -213,7 +205,7 @@ def render_status_line(call: SlotCall) -> SlotResult | None:
     """``home.status_lines``."""
     if not call.model:
         return None
-    return SlotResult(lines=(texts.user_t("status_line", _lang(call)),))
+    return SlotResult(lines=(texts.user_t("status_line"),))
 
 
 async def load_admin_card(conn: AsyncConnection, user: Any, view: Mapping[str, Any]) -> Any:

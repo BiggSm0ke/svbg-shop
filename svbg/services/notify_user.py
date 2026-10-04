@@ -149,7 +149,7 @@ class Notification:
     base: str
     user_id: int
     telegram_id: int
-    lang: str | None
+    lang: str | None = "ru"  # the bot is Russian-only; kept for old readers
     subscription_id: int | None = None
     paid_until: datetime | None = None
     is_trial: bool = False
@@ -497,7 +497,6 @@ class NotifyUser:
             base=base,
             user_id=int(row["user_id"]),
             telegram_id=int(row["telegram_id"]),
-            lang=row["language"],
             subscription_id=row["subscription_id"],
             paid_until=row["paid_until"],
             is_trial=bool(row["is_trial"]),
@@ -544,7 +543,6 @@ class NotifyUser:
                 notification_log.c.subscription_id,
                 notification_log.c.payload,
                 users.c.telegram_id,
-                users.c.language,
                 users.c.banned_at,
                 users.c.bot_blocked_at,
                 subscriptions.c.link_state,

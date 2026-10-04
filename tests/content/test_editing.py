@@ -74,7 +74,7 @@ async def test_set_text_applies_immediately_with_entities_and_audit(
     )
     assert [r["entity"] for r in rows] == ["screen", "note"]
     assert rows[0]["old"]["version"] == ver and rows[0]["new"]["version"] == ver + 1
-    assert rows[1]["new"]["summary"] == "Текст (ru)"
+    assert rows[1]["new"]["summary"] == "Текст экрана"
 
 
 async def test_two_admins_do_not_overwrite_each_other(editor: ContentEditor, store: ContentStore) -> None:
@@ -103,7 +103,7 @@ async def test_undo_restores_previous_text_and_is_audited(
         await editor.undo(res.batch_id, actor=None)
     history = await editor.history(sid)
     assert history[0].is_undo and history[0].summary.startswith("↩️ Отменено")
-    assert history[1].undone and history[1].summary == "Текст (ru)"
+    assert history[1].undone and history[1].summary == "Текст экрана"
     # the undo itself can be undone (redo)
     await editor.undo(undo.batch_id, actor=None)
     again = store.get_screen(sid)

@@ -2,12 +2,16 @@
 
 The admin is one tree (``svbg.tg.admin.menu``): the root ``adm`` and its sections. A list screen of a
 section ends with ``[⬅️ <section>] [🛠 Админка]`` (:func:`back_row`) instead of the user's «🏠 Меню»; only
-the root leads to the user home. Kept import-light (aiogram types and the callback codec only), so the
+the root leads to the user home. A deeper screen ends with its own back button plus «🛠 Админка»
+(:func:`with_admin`), a section screen starts with the breadcrumb (:func:`header`), short buttons go two per
+row (:func:`pairs`). ``tests/e2e/test_admin_tree.py`` walks the whole admin and checks these rules. Kept
+import-light (aiogram types and the callback codec only), so the
 bundled modules (``svbg.ext.*``) can use it from their ``install``.
 """
 
 from __future__ import annotations
 
+import html
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final
@@ -35,8 +39,11 @@ __all__ = [
     "breadcrumb",
     "has_route",
     "has_screen",
+    "header",
+    "pairs",
     "reachable",
     "short",
+    "with_admin",
 ]
 
 ROOT: Final = "adm"
@@ -58,6 +65,7 @@ TITLES: Final[Mapping[str, str]] = MappingProxyType(
         ROOT_ALIAS: "🛠 Админка",
         HUB_USERS: "👥 Пользователи",
         "plans": "📦 Тарифы",
+        "locs": "📍 Локации",
         HUB_PAY: "💳 Оплата",
         "apay": "🏦 Кассы",
         "apay.rc": "🧾 Ждут подтверждения",
@@ -70,13 +78,17 @@ TITLES: Final[Mapping[str, str]] = MappingProxyType(
         "achat": "🛎 Админ-группа",
         HUB_LOOK: "🎨 Оформление",
         "ce.home": "✏️ Конструктор",
+        "ce.list": "📋 Экраны",
         "pgs": "📄 Страницы",
         STATS: "📊 Статистика",
         HUB_SYSTEM: "⚙️ Система",
         "status": "🩺 Состояние",
-        "ops": "💾 Бэкапы",
+        "status.att": "⚠️ Требует внимания",
+        "status.panel": "🖥 Что включено в панели",
+        "ops": "💾 Бэкапы и обновления",
         "roles": "👮 Команда",
-        PANEL: "🔌 Панель",
+        "rls": "🎭 Роли",
+        PANEL: "🔌 Панель Remnawave",
         "settings_root": "🔎 Все настройки",
         HUB_MODULES: "🧩 Модули",
         "lte": "🌐 Трафик LTE",
@@ -118,10 +130,16 @@ PARENT: Final[Mapping[str, str]] = MappingProxyType(
         "ops": HUB_SYSTEM,
         "roles": HUB_SYSTEM,
         "settings_root": HUB_SYSTEM,
+        "set.sec": "settings_root",
         PANEL: HUB_SYSTEM,
         "status.att": "status",
         "status.panel": "status",
         "locs": "plans",
+        "ce.list": "ce.home",
+        "achat.t": "achat",
+        "prm.k": "prm",
+        "pgs.c": "pgs",
+        "rls": "roles",
         "lte": HUB_MODULES,
         "ipguard": HUB_MODULES,
     }
@@ -166,6 +184,43 @@ def breadcrumb(screen: str, title: str | None = None) -> str:
         chain.append(TITLES.get(node, node))
         node = None if node in (ROOT, ROOT_ALIAS) else PARENT.get(node, ROOT)
     return " › ".join(reversed(chain))
+
+
+#: A button label up to this long shares its row with a neighbour (two per row), a longer one has its own.
+SHORT: Final = 20
+
+
+def pairs(buttons: list[InlineKeyboardButton], *, short: int = SHORT) -> list[list[InlineKeyboardButton]]:
+    """Two short buttons per row, in order; a long label gets a row of its own."""
+    rows: list[list[InlineKeyboardButton]] = []
+    pending: InlineKeyboardButton | None = None
+    for button in buttons:
+        if len(button.text) > short:
+            if pending is not None:
+                rows.append([pending])
+                pending = None
+            rows.append([button])
+        elif pending is None:
+            pending = button
+        else:
+            rows.append([pending, button])
+            pending = None
+    if pending is not None:
+        rows.append([pending])
+    return rows
+
+
+def header(screen: str, title: str | None = None) -> str:
+    """The first line of a section screen (HTML): ``🛠 Админка › 📣 Связь › <b>📨 Рассылки</b>``."""
+    crumb = breadcrumb(screen, title)
+    head, sep, last = crumb.rpartition(" › ")
+    bold = f"<b>{html.escape(last, quote=False)}</b>"
+    return f"{html.escape(head, quote=False)} › {bold}" if sep else bold
+
+
+def with_admin(row: list[InlineKeyboardButton]) -> list[InlineKeyboardButton]:
+    """``row`` (a back button) plus «🛠 Админка» on the right: the last row of a deeper admin screen."""
+    return [*row, _button(_ADMIN_LABEL, ROOT)]
 
 
 def has_screen(router: Any, code: str) -> bool:

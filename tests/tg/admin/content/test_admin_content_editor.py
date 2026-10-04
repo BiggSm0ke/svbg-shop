@@ -65,8 +65,8 @@ async def test_owner_changes_text_others_see_it_next_click_and_undo_restores(ce:
     assert entry is not None
     old = entry.text("ru").text
     await ce.click(OWNER, SCREEN_EDITOR, arg=str(sid))
-    await ce.press(OWNER, "📝 Текст RU")
-    assert "Пришлите новый текст экрана (ru)" in ce.last_text()
+    await ce.press(OWNER, "📝 Текст")
+    assert "Пришлите новый текст экрана одним сообщением" in ce.last_text()
     entities = [
         {"type": "bold", "offset": 0, "length": 6},
         {"type": "spoiler", "offset": 7, "length": 5},
@@ -403,8 +403,8 @@ async def test_history_lists_changes_with_undo(ce: CEnv) -> None:
     await ce.act(OWNER, "tx", f"{sid}.ru")
     await ce.send(msg(OWNER, "Один"))
     await ce.press(OWNER, "🕘 История")
-    assert "Текст (ru)" in ce.last_text()
-    await ce.press(OWNER, "↩️ Текст (ru)")
+    assert "Текст экрана" in ce.last_text()
+    await ce.press(OWNER, "↩️ Текст экрана")
     assert ce.toasts[-1] == "↩️ Отменено"
 
 
@@ -460,7 +460,7 @@ async def test_screen_card_counts_text_like_telegram(ce: CEnv) -> None:
     assert entry is not None
     await ce.editor.set_text(sid, "ru", "🔥" * 10, None, expected_version=entry.screen.version, actor=None)
     await ce.click(OWNER, SCREEN_EDITOR, arg=str(sid))
-    assert "ru (20/4096)" in ce.last_text()  # UTF-16 units, as the limits are checked
+    assert "Текст: 20 из 4096 знаков" in ce.last_text()  # UTF-16 units, as the limits are checked
 
 
 async def test_buttons_beyond_the_telegram_limit(ce: CEnv) -> None:
@@ -515,7 +515,7 @@ async def test_in_place_flow_from_the_service_row(ce: CEnv) -> None:
     assert "🔘 Кнопка «" in ce.last_text()
     await ce.click(OWNER, "home")
     await ce.press(OWNER, "✏️ Экран")
-    await ce.press(OWNER, "📝 Текст RU")
+    await ce.press(OWNER, "📝 Текст")
     started = _time.perf_counter()
     assert await ce.send(msg(OWNER, "Новая главная"))
     await ce.click(USER, "home")
@@ -560,4 +560,4 @@ async def test_setup_entry_point_wires_everything(ce: CEnv, tmp_path: Any) -> No
         await env.add(OWNER, "owner")
         await env.router.dispatch_callback(callback(OWNER, "v1:ce.home:o"))
         sent = env.transport.calls[-1]
-        assert "Конструктор экранов" in str(getattr(sent, "text", ""))
+        assert "✏️ Конструктор" in str(getattr(sent, "text", ""))

@@ -378,7 +378,7 @@ class OwnerSetup:
                 telegram_id=tg_user.id,
                 username=tg_user.username,
                 first_name=tg_user.first_name,
-                language=tg_user.language_code,
+                language="ru",  # the bot is Russian-only
             )
         except OwnerLinkError as e:
             log.info("owner link rejected for telegram user %s: %s", tg_user.id, e.reason)

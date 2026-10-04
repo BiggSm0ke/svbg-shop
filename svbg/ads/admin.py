@@ -44,13 +44,14 @@ F_NEW: Final = "ads.f.new"
 F_TITLE: Final = "ads.f.title"
 F_CODE: Final = "ads.f.code"
 _ID_RE: Final = re.compile(r"^\d{1,18}$")
+PAGE: Final = 10  # links per page of the list
 
 _T: Final[dict[str, str]] = {
-    "list_title": "📣 <b>Рекламные ссылки</b>\n"
-    "Ссылка запоминает, откуда пришёл пользователь (первый переход).",
-    "list_empty": "Ссылок пока нет.",
+    "list_hint": "У каждой ссылки свои переходы, пробные и оплаты. Человек засчитывается той ссылке, "
+    "по которой пришёл впервые.",
+    "list_empty": "Ссылок пока нет. Нажмите «➕ Новая ссылка» и дайте её блогеру или поставьте в пост.",
     "new": "➕ Новая ссылка",
-    "to_list": "⬅️ К ссылкам",
+    "to_list": "⬅️ Реклама",
     "copy": "📋 Скопировать ссылку",
     "b_on": "▶️ Включить",
     "b_off": "⏸ Выключить",
@@ -179,8 +180,11 @@ class AdAdminScreens:
 
     # ------------------------------------------------------------ screens
 
-    async def _list_screen(self, ctx: ScreenCtx, _arg: Any) -> View:
+    async def _list_screen(self, ctx: ScreenCtx, arg: Any) -> View:
         links = self.service.all()
+        pages = max(1, -(-len(links) // PAGE))
+        page = int(arg) if isinstance(arg, str) and arg.isdigit() and len(arg) < 6 else 0
+        page = min(page, pages - 1)
         rows = [
             [
                 nav_button(
@@ -189,12 +193,22 @@ class AdAdminScreens:
                     arg=str(link.id),
                 )
             ]
-            for link in links[:50]
+            for link in links[page * PAGE : (page + 1) * PAGE]
         ]
+        if pages > 1:
+            pager = []
+            if page > 0:
+                pager.append(nav_button("◀️", SCREEN_LIST, arg=str(page - 1)))
+            pager.append(nav_button(f"{page + 1} из {pages}", SCREEN_LIST, arg=str(page)))
+            if page < pages - 1:
+                pager.append(nav_button("▶️", SCREEN_LIST, arg=str(page + 1)))
+            rows.append(pager)
         rows.append([nav_button(_T["new"], ACTIONS, "new")])
         rows.append(nav.back_row(SCREEN_LIST))
-        text = _T["list_title"] + ("" if links else "\n\n" + _T["list_empty"])
-        return View(text=text, parse_mode="HTML", keyboard=rows)
+        lines = [nav.header(SCREEN_LIST), "", _T["list_hint"]]
+        if not links:
+            lines += ["", _T["list_empty"]]
+        return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     async def _card_screen(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:
         link = self._link(arg)
@@ -236,7 +250,7 @@ class AdAdminScreens:
                 nav_button(_T["b_delete"], SCREEN_DELETE, arg=lid),
             ]
         rows.append(edit)
-        rows.append([nav_button(_T["to_list"], SCREEN_LIST)])
+        rows.append(nav.with_admin([nav_button(_T["to_list"], SCREEN_LIST)]))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     async def _delete_screen(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:

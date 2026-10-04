@@ -81,7 +81,7 @@ async def test_seeding_is_idempotent_and_keeps_owner_edits(db: CountingDatabase)
         assert await seed_system_screens(conn) == 0
 
 
-async def test_keyboard_templates_per_language_and_conditions(db: CountingDatabase) -> None:
+async def test_keyboard_templates_are_russian_and_conditions(db: CountingDatabase) -> None:
     store = ContentStore(db)
     await store.load()
     sid = await _insert_screen(db, "shop", {"ru": {"text": "Магазин"}, "en": {"text": "Shop"}})
@@ -94,9 +94,9 @@ async def test_keyboard_templates_per_language_and_conditions(db: CountingDataba
     assert entry is not None
     ru = entry.keyboard("ru")
     assert [[t.label for t in row] for row in ru.rows] == [["Тарифы", "Купить"], ["Админ"]]
-    en = entry.keyboard("en")
-    assert [[t.label for t in row] for row in en.rows] == [["Тарифы", "Buy"], ["Админ"]]
-    assert entry.keyboard("de") is entry.keyboard("ru")  # unknown language → default
+    assert entry.keyboard("en") is ru  # Russian-only: old English labels are not used
+    assert entry.keyboard("de") is ru
+    assert entry.text("en").text == "Магазин"
     admin_btn = ru.rows[1][0]
     assert admin_btn.condition is not None
     assert admin_btn.condition(UserCtx(1, role="owner"))
@@ -257,10 +257,11 @@ async def test_retired_staff_buttons_go_away_only_while_untouched(db: CountingDa
             .where(screen_buttons.c.system_key == edited.system_key)
             .values(label={"ru": "⚙️ Мои настройки"})
         )
-    async with db.tx() as conn:
-        assert await retire_system_buttons(conn) == 1
+    async with db.tx() as conn:  # everything but the edited one («🌐 Язык», «🎟 Промокод» too)
+        assert await retire_system_buttons(conn) == len(defaults.RETIRED_SYSTEM_BUTTONS) - 1
     keys = {r["system_key"] for r in await db.raw("select system_key from screen_buttons")}
     assert "plans" not in keys and "settings" in keys and "admin" in keys
+    assert not {"lang", "promo"} & keys
     async with db.tx() as conn:
         assert await retire_system_buttons(conn) == 0  # idempotent
     batch = await db.raw(

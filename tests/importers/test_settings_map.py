@@ -352,9 +352,10 @@ def test_core_settings(plan) -> None:  # type: ignore[no-untyped-def]
     assert ch["NOTIFY_TRIAL_ENDING_HOURS"] == "2"
     assert ch["MAINTENANCE_MODE"] == "auto"
     assert ch["MAINTENANCE_MESSAGE"] == "Технические работы, скоро вернёмся"
-    assert ch["DEFAULT_LANGUAGE"] == "ru"
-    assert ch["I18N_AVAILABLE"] == "ru,en"
-    assert ch["I18N_ASK_ON_START"] == "false"
+    assert not {"DEFAULT_LANGUAGE", "I18N_AVAILABLE", "I18N_ASK_ON_START"} & set(ch)  # Russian-only bot
+    for key in ("DEFAULT_LANGUAGE", "AVAILABLE_LANGUAGES", "LANGUAGE_SELECTION_ENABLED"):
+        skipped = plan.skipped(key)
+        assert skipped is not None and "только на русском" in skipped.reason
     assert ch["ONBOARDING_RULES"] == "off"
     assert ch["ONBOARDING_ASK_REFERRAL_CODE"] == "true"
     assert ch["PRICING_ROUNDING"] == "true"

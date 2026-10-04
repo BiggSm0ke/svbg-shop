@@ -105,7 +105,7 @@ async def test_send_from_the_copy_when_the_original_is_gone(
 
 async def test_photo_caption_entities_survive(tg: FakeTelegram, sender: BroadcastSender) -> None:
     content = {"type": "photo", "text": TEXT, "entities": ENTITIES, "file_id": "PHOTO", "spoiler": True}
-    result = await sender.deliver(broadcast(content=content, source_chat_id=None), USER, "en")
+    result = await sender.deliver(broadcast(content=content, source_chat_id=None), USER, "ru")
     assert result.outcome is Outcome.SENT
     got = tg.message(USER, result.message_id or 0)
     assert got is not None and got["caption"] == TEXT and got["caption_entities"] == ENTITIES

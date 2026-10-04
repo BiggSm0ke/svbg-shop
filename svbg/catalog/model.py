@@ -80,10 +80,9 @@ class Audience(Protocol):
     def has_paid(self) -> bool: ...
 
 
-def pick_lang(values: Mapping[str, str], lang: str | None, default: str = DEFAULT_LANG) -> str:
-    """The value for ``lang``, else the default language, else any; ``""`` for an empty mapping."""
-    if lang and values.get(lang):
-        return values[lang]
+def pick_lang(values: Mapping[str, str], _lang: str | None = None, default: str = DEFAULT_LANG) -> str:
+    """The Russian value, else any; ``""`` for an empty mapping. The bot is Russian-only: ``_lang`` is
+    accepted for old callers and ignored (old ``en`` names stay in the database unused)."""
     if values.get(default):
         return values[default]
     return next((v for v in values.values() if v), "")

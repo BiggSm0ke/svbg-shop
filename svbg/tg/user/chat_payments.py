@@ -32,9 +32,8 @@ from svbg.core.clock import now
 from svbg.core.errors import Capturer, guard
 from svbg.payments.providers.manual import receipt_problem
 from svbg.payments.providers.stars import TEXTS as STARS_TEXTS
-from svbg.payments.providers.stars import PayloadKind, classify_payload, localize_pre_checkout
+from svbg.payments.providers.stars import PayloadKind, classify_payload
 from svbg.payments.tables import LATE_PAYABLE, payments
-from svbg.subscriptions.hold import localize_spend
 from svbg.tg.user.texts import t
 
 if TYPE_CHECKING:
@@ -250,15 +249,10 @@ class ChatPayments:
         @router.pre_checkout_query()
         async def on_pre_checkout(query: PreCheckoutQuery) -> None:
             reason: str | None = STARS_TEXTS["closed"]
-            lang = "ru"
             async with guard("tg:pre_checkout", hub=self._hub):
-                user = await self._users.load(query.from_user)
-                lang = user.lang if user is not None else "ru"
                 reason = await self.decide_pre_checkout(
                     query.invoice_payload, query.currency, query.total_amount
                 )
-            if reason is not None:
-                reason = localize_spend(localize_pre_checkout(reason, lang), lang)
             try:
                 await query.answer(ok=reason is None, error_message=reason)
             except TelegramAPIError as e:

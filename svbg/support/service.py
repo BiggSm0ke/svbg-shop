@@ -76,27 +76,15 @@ _COPYABLE: Final = (
 )  # fmt: skip
 _THREAD_GONE: Final = ("thread not found", "topic_deleted", "topic not found", "topic_id_invalid")
 
-TEXTS: Final[Mapping[str, Mapping[str, str]]] = {
-    "ru": {
-        "prompt": "💬 Напишите вопрос прямо сюда — одним или несколькими сообщениями, "
-        "можно с фото или файлом. Ответ придёт в этот чат.",
-        "accepted": "✅ Передали в поддержку. Ответ придёт сюда.",
-        "closed": "✅ Обращение закрыто. Если вопрос остался — просто напишите сюда.",
-        "unavailable": "Поддержка сейчас недоступна. Попробуйте позже.",
-        "link": "💬 Открыть чат поддержки",
-        "write": "✍️ Написать в поддержку",
-        "title": "💬 Поддержка",
-    },
-    "en": {
-        "prompt": "💬 Write your question right here — one or several messages, photos and files are fine. "
-        "The answer will come to this chat.",
-        "accepted": "✅ Sent to support. The answer will come here.",
-        "closed": "✅ The request is closed. If you still have a question, just write here.",
-        "unavailable": "Support is unavailable right now. Please try again later.",
-        "link": "💬 Open the support chat",
-        "write": "✍️ Write to support",
-        "title": "💬 Support",
-    },
+TEXTS: Final[Mapping[str, str]] = {
+    "prompt": "💬 Напишите вопрос прямо сюда, одним или несколькими сообщениями, можно с фото или файлом. "
+    "Ответ придёт в этот чат.",
+    "accepted": "✅ Передали в поддержку. Ответ придёт сюда.",
+    "closed": "✅ Обращение закрыто. Если вопрос остался, просто напишите сюда.",
+    "unavailable": "Поддержка сейчас недоступна. Попробуйте позже.",
+    "link": "💬 Открыть чат поддержки",
+    "write": "✍️ Написать в поддержку",
+    "title": "💬 Поддержка",
 }
 _STAFF: Final[Mapping[str, str]] = {
     "close": "✅ Закрыть",
@@ -115,8 +103,9 @@ class TopicError(Exception):
     """The group refused a topic (the bot was removed: Telegram answered 403)."""
 
 
-def t(lang: str | None, key: str) -> str:
-    return (TEXTS.get(lang or "ru") or TEXTS["ru"])[key]
+def t(_lang: str | None, key: str) -> str:
+    """User text ``key``; the first argument (an old language) is ignored: the bot is Russian-only."""
+    return TEXTS[key]
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,7 +120,6 @@ class Ticket:
 @dataclass(frozen=True, slots=True)
 class _Sender:
     user_id: int
-    lang: str
 
 
 def _ticket(row: Any) -> Ticket:
@@ -339,14 +327,14 @@ class TicketService:
     async def sender(self, telegram_id: int) -> _Sender | None:
         """The user if their free messages go to the support now: armed, or has had a ticket (1 SQL)."""
         has = sa.exists().where(tickets.c.user_id == users.c.id)
-        stmt = sa.select(users.c.id, users.c.language, has.label("has")).where(
+        stmt = sa.select(users.c.id, has.label("has")).where(
             users.c.telegram_id == telegram_id, users.c.banned_at.is_(None)
         )
         async with self._db.read() as conn:
             row = (await conn.execute(stmt)).first()
         if row is None or not (row.has or self.armed(telegram_id)):
             return None
-        return _Sender(int(row.id), str(row.language or "ru"))
+        return _Sender(int(row.id))
 
     async def user_message(self, message: Message) -> bool:
         """Copy a private message of the user into their topic; ``False`` = not for the support."""
@@ -359,7 +347,7 @@ class TicketService:
         async with self._lock(who.user_id):
             ticket, started = await self._ensure(who.user_id)
             if ticket is None:
-                await self._say(message.chat.id, t(who.lang, "unavailable"))
+                await self._say(message.chat.id, t(None, "unavailable"))
                 return True
             reply_to = await self._mapped(ticket.user_id, message.reply_to_message, side="user")
             group_msg = await self._copy_in(ticket, message, reply_to)
@@ -372,7 +360,7 @@ class TicketService:
                     )
                 )
         if started:
-            await self._say(message.chat.id, t(who.lang, "accepted"))
+            await self._say(message.chat.id, t(None, "accepted"))
         return True
 
     async def _latest(self, user_id: int) -> Ticket | None:
@@ -625,11 +613,5 @@ class TicketService:
                 except TelegramAPIError as exc:
                     log.info("support: %s failed: %s", type(method).__name__, exc)
         if tg is not None:
-            lang = await self._lang(user_id)
-            await self._say(int(tg), t(lang, "closed"))
+            await self._say(int(tg), t(None, "closed"))
         return _STAFF["closed_ok"]
-
-    async def _lang(self, user_id: int) -> str:
-        async with self._db.read() as conn:
-            value = await conn.scalar(sa.select(users.c.language).where(users.c.id == user_id))
-        return str(value or "ru")

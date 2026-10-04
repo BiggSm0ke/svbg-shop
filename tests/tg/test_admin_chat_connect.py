@@ -1,4 +1,4 @@
-"""«🔔 Админ-чат»: connecting the group (request_chat / ID), human errors with «Проверить снова», topic
+"""«🛎 Админ-группа»: connecting the group (request_chat / ID), human errors with «Проверить снова», topic
 switches, owner-only access, disconnect and the module ``setup`` wiring
 (through the real settings pipeline)."""
 
@@ -95,7 +95,7 @@ def _visible(s: Setup, user_id: int) -> list[Call]:
 
 
 def last_screen(s: Setup, user_id: int = OWNER) -> Call:
-    return [c for c in _visible(s, user_id) if c.params["text"].startswith("🔔")][-1]
+    return [c for c in _visible(s, user_id) if "🛎 Админ-группа" in c.params["text"].split("\n", 1)[0]][-1]
 
 
 def last_text(s: Setup, user_id: int = OWNER) -> str:
@@ -158,6 +158,11 @@ async def test_owner_connects_by_picking_a_group(s: Setup) -> None:
     text = final.params["text"]
     assert f"✅ Группа «Group {GROUP}» подключена. Темы готовы: 9 из 9." in text
     assert f"Группа: <code>{GROUP}</code>" in text and "✅ работает" in text
+    assert "Темы: включено 9 из 10." in text
+    assert not [t for t, d in buttons(final) if ":tog:" in d]  # the switches are one tap away
+    await press(s, "🗂 Темы")
+    final = last_screen(s)
+    assert "🛎 Админ-группа › <b>🗂 Темы</b>" in final.params["text"]
     toggles = [t for t, d in buttons(final) if ":tog:" in d]
     assert len(toggles) == 10 and sum(t.startswith("✅ ") for t in toggles) == 9
     assert "⬜ 🎫 Тикеты" in toggles
@@ -236,6 +241,7 @@ async def test_topic_switches_and_fallback(s: Setup) -> None:
     await connected(s)
     thread = s.env.service.state(K_PAYMENTS).thread_id
     assert thread is not None
+    await press(s, "🗂 Темы")
     toggle = button(last_screen(s), "✅ 💳 Оплаты и пополнения")
 
     assert await click(s.env, MEMBER, toggle, chat_id=MEMBER, message_id=1) == "Нет прав"

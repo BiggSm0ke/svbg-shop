@@ -161,7 +161,7 @@ async def test_owner_sees_everything(st: StEnv) -> None:
 
     await st.open()
     text = st.text
-    assert "<b>Состояние</b>" in text and "Работает" in text and "память" in text
+    assert "Состояние</b>" in text and "работает" in text and "память" in text
     assert "✅ Telegram-бот" in text
     assert "🔴 Remnawave — Панель недоступна с 11:58 UTC" in text
     assert "⚪ Админ-чат — Не подключён" in text
@@ -175,14 +175,14 @@ async def test_owner_sees_everything(st: StEnv) -> None:
     assert "Техработы: выключены" in text
     labels = st.env.labels()
     assert "⚠️ Требует внимания (2)" in labels
-    assert any("Мастер настройки" in label for label in labels)
+    assert not any("Мастер настройки" in label for label in labels)  # it is in «🔌 Панель Remnawave»
     assert st.env.button("Техработы") == encode("set.v", "o", "sys.maint")  # admin → ⚙️ Система → 🛠
 
 
 async def test_viewer_reads_without_owner_buttons(st: StEnv) -> None:
     await st.attention.raise_item("a1", "warn", "Что-то", fix_action=fix_setting("REMNAWAVE_TOKEN"))
     await st.open(VIEWER)
-    assert "<b>Состояние</b>" in st.text
+    assert "🛠 Админка › ⚙️ Система › <b>🩺 Состояние</b>" in st.text
     assert not any("Мастер" in label for label in st.env.labels())
     await st.open(VIEWER, SCREEN_ATTENTION)
     assert "Что-то" in st.text
@@ -198,7 +198,7 @@ async def test_others_are_denied(st: StEnv, tg_id: int) -> None:
 
 async def test_status_command(st: StEnv) -> None:
     assert await st.screens.handle_status(text_message(OWNER, "/status")) is True
-    assert "<b>Состояние</b>" in st.text
+    assert "🛠 Админка › ⚙️ Система › <b>🩺 Состояние</b>" in st.text
     assert await st.screens.handle_status(text_message(OWNER, "/status", chat_type="group")) is False
 
 
@@ -281,7 +281,7 @@ async def test_broken_parts_do_not_break_the_screen(make_stenv: StFactory) -> No
     text = st.text
     assert "❔ slowpoke — Не ответил на проверку" in text
     assert "Не удалось получить: очередь задач" in text
-    assert "<b>Состояние</b>" in text
+    assert "🛠 Админка › ⚙️ Система › <b>🩺 Состояние</b>" in text
 
 
 async def test_secrets_are_masked(st: StEnv) -> None:
@@ -331,4 +331,4 @@ async def test_module_setup_entry_point(make_senv: Callable[..., Awaitable[SEnv]
     router = status.setup(env.router, deps)
     assert isinstance(router, Router)
     await env.click(OWNER, encode(SCREEN))
-    assert "<b>Состояние</b>" in env.text
+    assert "🛠 Админка › ⚙️ Система › <b>🩺 Состояние</b>" in env.text

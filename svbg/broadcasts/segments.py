@@ -58,9 +58,14 @@ PRESETS: Final[Mapping[str, Preset]] = {
         Preset("nosub", "Без подписки", {"sub": "none"}),
         Preset("never_paid", "Никогда не платили", {"has_paid": False}),
         Preset("balance", "Баланс больше нуля", {"balance_minor": {"gt": 0}}),
-        Preset("lang_ru", "Язык: русский", {"lang": "ru"}),
-        Preset("lang_en", "Язык: английский", {"lang": "en"}),
     )
+}
+
+#: Presets of the removed language choice, still found in old drafts: «русский» is everyone now,
+#: «английский» is nobody (``{"lang": "en"}`` compiles to false).
+_RETIRED_PRESETS: Final[Mapping[str, Mapping[str, Any] | None]] = {
+    "lang_ru": None,
+    "lang_en": {"lang": "en"},
 }
 
 
@@ -69,10 +74,15 @@ def validate_segment(raw: Any, **sql_kw: Any) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raise SegmentError("Сегмент повреждён")
     preset = raw.get("preset", "all")
+    dsl = raw.get("dsl")
+    if preset in _RETIRED_PRESETS:
+        retired = _RETIRED_PRESETS[preset]
+        preset = "all"
+        if retired is not None:
+            dsl = {"all": [dict(retired), dict(dsl)]} if isinstance(dsl, Mapping) and dsl else dict(retired)
     if preset not in PRESETS:
         raise SegmentError(f"Неизвестный пресет «{preset}»")
     out: dict[str, Any] = {"preset": preset}
-    dsl = raw.get("dsl")
     if dsl:
         if not isinstance(dsl, Mapping):
             raise SegmentError("Условие должно быть JSON-объектом")
@@ -133,7 +143,8 @@ def recipients_where(
     channel_id: int | None = None,
 ) -> sa.ColumnElement[bool]:
     """WHERE clause over ``users`` for ``segment`` (validated again: stored JSON is not trusted)."""
-    kw: dict[str, Any] = {"at": at, "default_lang": default_lang, "channel_id": channel_id}
+    del default_lang  # accepted for old callers; the bot is Russian-only
+    kw: dict[str, Any] = {"at": at, "channel_id": channel_id}
     seg = validate_segment(segment, **kw)
     preset = PRESETS[seg["preset"]]
     parts = [base_filter(marketing=marketing)]

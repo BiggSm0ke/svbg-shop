@@ -53,12 +53,11 @@ Kind = Literal["new", "renew", "change", "addon_devices"]
 
 
 class PricingError(ValueError):
-    """The order cannot be priced; ``str(error)`` is a short Russian message for the user, ``en`` — the same
-    in English."""
+    """The order cannot be priced; ``str(error)`` is a short Russian message for the user. A second argument
+    (an old English translation) is accepted and ignored."""
 
-    def __init__(self, text: str, en: str | None = None) -> None:
+    def __init__(self, text: str, _unused: str | None = None) -> None:
         super().__init__(text)
-        self.en = en or text
 
 
 class AddonLike(Protocol):
@@ -123,7 +122,7 @@ class PercentOff:
 
     def __post_init__(self) -> None:
         if isinstance(self.percent, bool) or not 1 <= self.percent <= 100:
-            raise PricingError("Скидка должна быть от 1 до 100 %", "The discount must be from 1 to 100%")
+            raise PricingError("Скидка должна быть от 1 до 100 %")
 
     def amount_off(self, subtotal_minor: int) -> int:
         return subtotal_minor * self.percent // 100
@@ -137,7 +136,7 @@ class FixedOff:
 
     def __post_init__(self) -> None:
         if isinstance(self.amount_minor, bool) or not 0 < self.amount_minor <= MAX_AMOUNT_MINOR:
-            raise PricingError("Скидка должна быть больше нуля", "The discount must be greater than zero")
+            raise PricingError("Скидка должна быть больше нуля")
 
     def amount_off(self, subtotal_minor: int) -> int:
         return min(self.amount_minor, subtotal_minor)
@@ -155,7 +154,7 @@ def apply_discounts(
 ) -> tuple[tuple[AppliedDiscount, ...], int]:
     """Apply ``discounts`` in order; each sees what is left after the previous ones; never below zero."""
     if subtotal_minor < 0:
-        raise PricingError("Сумма заказа не может быть отрицательной", "The order amount cannot be negative")
+        raise PricingError("Сумма заказа не может быть отрицательной")
     left = subtotal_minor
     applied: list[AppliedDiscount] = []
     for d in discounts:
@@ -217,12 +216,12 @@ def purchase_kind(*, live_plan_id: int | None, live_is_trial: bool, has_live: bo
 
 def _check_days(days: int) -> None:
     if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= MAX_DAYS:
-        raise PricingError("Неверный срок", "Invalid period")
+        raise PricingError("Неверный срок")
 
 
 def _total(subtotal: int, discounts: Sequence[Discount]) -> tuple[tuple[AppliedDiscount, ...], int]:
     if subtotal > MAX_AMOUNT_MINOR:
-        raise PricingError("Слишком большая сумма заказа", "The order amount is too large")
+        raise PricingError("Слишком большая сумма заказа")
     return apply_discounts(subtotal, discounts)
 
 
@@ -235,33 +234,24 @@ def quote_plan(
     extra_devices: int = 0,
     discounts: Sequence[Discount] = (),
     subscription_id: int | None = None,
-    lang: str | None = None,
 ) -> Quote:
     """Price ``days`` of ``plan`` (+ ``extra_devices`` paid devices for the whole period)."""
     _check_days(days)
     if kind not in ("new", "renew", "change"):
-        raise PricingError("Неверный вид заказа", "Invalid order type")
+        raise PricingError("Неверный вид заказа")
     price = plan.price(days, currency)
     if price is None:
-        raise PricingError("Этот срок сейчас не продаётся", "This period is not on sale right now")
+        raise PricingError("Этот срок сейчас не продаётся")
     lines = [Line(ITEM_PLAN, int(price.amount_minor), {"plan_id": plan.id, "days": days})]
     if isinstance(extra_devices, bool) or extra_devices < 0:
-        raise PricingError(
-            "Число устройств не может быть отрицательным", "The number of devices cannot be negative"
-        )
+        raise PricingError("Число устройств не может быть отрицательным")
     if extra_devices:
         addon = plan.addon
         if addon is None:
-            raise PricingError(
-                "Для этого тарифа докупка устройств недоступна",
-                "Adding devices is not available for this plan",
-            )
+            raise PricingError("Для этого тарифа докупка устройств недоступна")
         cap = None if addon.max_devices is None else max(0, addon.max_devices - (plan.device_limit or 0))
         if cap is not None and extra_devices > cap:
-            raise PricingError(
-                f"Можно не больше {addon.max_devices} устройств на подписку",
-                f"No more than {addon.max_devices} devices per subscription",
-            )
+            raise PricingError(f"Можно не больше {addon.max_devices} устройств на подписку")
         lines.append(
             Line(ITEM_DEVICES, addon.price_for(extra_devices, days), {"count": extra_devices, "days": days})
         )
@@ -278,7 +268,7 @@ def quote_plan(
         days=days,
         extra_devices=extra_devices,
         plan_snapshot=plan.snapshot(),
-        title=plan.title(lang),
+        title=plan.title(),
         subscription_id=subscription_id,
     )
 
@@ -303,20 +293,13 @@ def quote_devices(
 ) -> Quote:
     """Price ``count`` more devices until the end of the current period (02 §4.6)."""
     if isinstance(count, bool) or not isinstance(count, int) or count < 1:
-        raise PricingError("Выберите число устройств", "Choose the number of devices")
+        raise PricingError("Выберите число устройств")
     if addon is None or not device_limit:
-        raise PricingError(
-            "Для этого тарифа докупка устройств недоступна", "Adding devices is not available for this plan"
-        )
+        raise PricingError("Для этого тарифа докупка устройств недоступна")
     if seconds_left <= 0:
-        raise PricingError(
-            "Подписка закончилась — сначала продлите её", "Your subscription has ended — renew it first"
-        )
+        raise PricingError("Подписка закончилась — сначала продлите её")
     if addon.max_devices is not None and device_limit + current_extra + count > addon.max_devices:
-        raise PricingError(
-            f"Можно не больше {addon.max_devices} устройств на подписку",
-            f"No more than {addon.max_devices} devices per subscription",
-        )
+        raise PricingError(f"Можно не больше {addon.max_devices} устройств на подписку")
     days = days_left(seconds_left)
     line = Line(ITEM_DEVICES, addon.price_for(count, days), {"count": count, "days": days})
     applied, total = _total(line.amount_minor, discounts)

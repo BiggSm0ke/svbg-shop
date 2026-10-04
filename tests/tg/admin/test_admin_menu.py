@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 from aiogram.methods import DeleteMessage, DeleteMyCommands, SetMyCommands
-from aiogram.types import Chat, Message, MessageOriginHiddenUser, MessageOriginUser
+from aiogram.types import Chat, InlineKeyboardButton, Message, MessageOriginHiddenUser, MessageOriginUser
 
 from svbg import app_modules
 from svbg.core.component import ComponentRegistry, HealthReport, ProbeError
@@ -26,7 +26,7 @@ from svbg.tg.admin.commands import StaffCommands, commands_for
 from svbg.tg.admin.menu import HUBS, ROOT_SECTIONS
 from svbg.tg.admin.payments import PaymentScreens
 from svbg.tg.admin.settings import SettingsScreens
-from svbg.tg.admin.slices import OTHER, SLICES, home_of, pay_slice, target_of
+from svbg.tg.admin.slices import HIDDEN, OTHER, RETIRED, SLICES, home_of, pay_slice, target_of
 from svbg.tg.ui.codec import MAX_BYTES, encode
 from svbg.tg.ui.view import View
 from tests.dbkit import CountingDatabase
@@ -143,13 +143,52 @@ def test_every_setting_has_exactly_one_home() -> None:
     unknown = [k for sl in SLICES.values() for k in (*sl.keys, *sl.more, *sl.mirrors) if reg.find(k) is None]
     assert unknown == []  # no typo in the map
     for defn in reg.all():
+        if defn.key in HIDDEN:  # the language keys of older versions: shown nowhere
+            continue
         home = home_of(defn)
         assert home != OTHER, f"{defn.key} has no place in the admin (add it to svbg.tg.admin.slices)"
         if defn.section.startswith("payments."):
             slug = defn.section.partition(".")[2]
             assert home == pay_slice(slug) and target_of(home) == ("apay.c", slug), defn.key
-    assert home_of(reg.get("PAY_CLOCK_SKEW_ALERT_COUNT")) == "pay.list"
+    assert home_of(reg.get("PAY_CLOCK_SKEW_ALERT_COUNT")) == "pay.cfg"  # «🏦 Кассы» → «⚙️ Настройки»
     assert home_of(reg.get("CAPTCHA_ENABLED")) == "u.access"  # the entry captcha lives in «🚪 Вход в бот»
+
+
+def test_no_languages_in_the_admin() -> None:
+    """The bot speaks Russian only: no «🌐 Языки», no language key in any slice or label."""
+    assert "l.lang" not in SLICES and set(RETIRED) == {"l.lang"}
+    for sl in SLICES.values():
+        assert not {*sl.keys, *sl.more, *sl.mirrors} & HIDDEN, sl.id
+        assert "Язык" not in sl.title and "язык" not in sl.intro, sl.id
+    for hub in HUBS.values():
+        assert not any("Язык" in e.label for e in hub.entries), hub.code
+    assert not set(labels.CHOICE_LABELS) & HIDDEN
+
+
+def test_pairs_put_two_short_buttons_in_a_row() -> None:
+    def b(text: str) -> InlineKeyboardButton:
+        return InlineKeyboardButton(text=text, callback_data="x")
+
+    rows = nav.pairs([b("🔍 Найти"), b("🆕 Новые"), b("🔔 Уведомления клиентам"), b("🛎 Группа"), b("💬 Чат")])
+    assert [[x.text for x in r] for r in rows] == [
+        ["🔍 Найти", "🆕 Новые"],
+        ["🔔 Уведомления клиентам"],
+        ["🛎 Группа", "💬 Чат"],
+    ]
+    assert [[x.text for x in r] for r in nav.pairs([b("А"), b("Очень длинная кнопка раздела")])] == [
+        ["А"],
+        ["Очень длинная кнопка раздела"],
+    ]
+
+
+def test_headers_are_breadcrumbs() -> None:
+    assert nav.header(nav.HUB_USERS) == "🛠 Админка › <b>👥 Пользователи</b>"
+    assert nav.header("bc") == "🛠 Админка › 📣 Связь › <b>📨 Рассылки</b>"
+    assert nav.header("apay.c", "🏦 A&B") == "🛠 Админка › 💳 Оплата › 🏦 Кассы › <b>🏦 A&amp;B</b>"
+    assert [b.text for b in nav.with_admin([InlineKeyboardButton(text="⬅️ Тариф", callback_data="x")])] == [
+        "⬅️ Тариф",
+        "🛠 Админка",
+    ]
 
 
 def test_choice_labels_and_presets_fit_their_settings() -> None:
@@ -294,10 +333,14 @@ async def test_slice_shows_labels_more_and_links_back(menv: MEnv) -> None:
     await menv.click(OWNER, encode("set.v", arg="p.trial"))
     labels_ = menv.labels()
     assert "Дней пробного периода: 3" in labels_ and "Кому доступен триал: Всем" in labels_
-    assert "🧰 Ещё (1)" in labels_ and not any("Переносить" in lb for lb in labels_)
+    assert any(lb.startswith("Переносить остаток триала") for lb in labels_)  # nothing technical here
+    assert not any(lb.startswith("🧰 Ещё") for lb in labels_)
     assert labels_[-2:] == ["⬅️ Тарифы", "🛠 Админка"]
+    await menv.click(OWNER, encode("set.v", arg="p.more"))
+    assert "🧰 Ещё (1)" in menv.labels() and not any("Сколько хранить" in lb for lb in menv.labels())
     await menv.press(OWNER, "🧰 Ещё")
-    assert any(lb.startswith("Переносить остаток триала") for lb in menv.labels())
+    assert any(lb.startswith("Сколько хранить список устройств") for lb in menv.labels())
+    await menv.click(OWNER, encode("set.v", arg="p.trial"))
     await menv.press(OWNER, "Дней пробного периода")
     assert menv.button("⬅️ Пробный период") == encode("set.v", arg="p.trial")
     await menv.press(OWNER, "✅ 3")  # a ready value is applied like any change
@@ -307,7 +350,8 @@ async def test_slice_shows_labels_more_and_links_back(menv: MEnv) -> None:
     assert menv.button("⬅️ Пробный период") == encode("set.v", arg="p.trial")
     # from the registry tree the card goes back to its section
     await menv.click(OWNER, encode("set.key", arg="TRIAL_DAYS@t"))
-    assert menv.button("Назад") == encode("set.sec", arg="sales")
+    assert menv.button("⬅️ Продажи и триал") == encode("set.sec", arg="sales")
+    assert menv.labels()[-1] == "🛠 Админка"
 
 
 async def test_entry_slice_holds_the_captcha_and_the_channel(menv: MEnv) -> None:
@@ -629,3 +673,29 @@ async def test_slice_back_skips_sections_closed_to_the_viewer(menv: MEnv) -> Non
         assert menv.labels()[-1:] == ["🛠 Админка"] and not menv.labels()[-2].startswith("⬅️"), sid
     await menv.click(OWNER, encode("set.v", arg="p.trial"))  # the owner keeps the way to the section
     assert menv.labels()[-2:] == ["⬅️ Тарифы", "🛠 Админка"]
+
+
+async def test_hubs_pair_short_buttons_and_old_language_buttons_still_open(menv: MEnv) -> None:
+    await menv.click(OWNER, encode(nav.HUB_USERS))
+    markup = menv.rendered()[-1].reply_markup
+    rows = [[b.text for b in row] for row in markup.inline_keyboard]  # type: ignore[union-attr]
+    assert rows[0] == ["🔍 Найти", "🆕 Новые"] and rows[-1] == ["🛠 Админка"]
+    assert menv.text.startswith("🛠 Админка › <b>👥 Пользователи</b>")
+    await menv.click(OWNER, encode(nav.HUB_LOOK))
+    assert not any("Язык" in lb for lb in menv.labels())
+    await menv.click(OWNER, encode("set.v", arg="l.lang"))  # a button of an old message
+    assert menv.text.startswith("🛠 Админка › <b>🎨 Оформление</b>")
+    await menv.click(OWNER, encode("set.key", arg="DEFAULT_LANGUAGE"))  # a language key is gone everywhere
+    assert "🔎 Все настройки</b>" in menv.text.split("\n", 1)[0]
+
+
+async def test_a_long_slice_is_paged(menv: MEnv) -> None:
+    await menv.click(OWNER, encode("set.v", arg="sys.server:m"))
+    first = menv.labels()
+    assert "1/2" in first and "▶️" in first and first[-2:] == ["⬅️ Система", "🛠 Админка"]
+    assert len([lb for lb in first if ":" in lb]) == 10
+    await menv.press(OWNER, "▶️")
+    second = menv.labels()
+    assert "2/2" in second and "◀️" in second and not set(second) & {lb for lb in first if ":" in lb}
+    await menv.click(OWNER, encode("set.v", arg="sys.server"))  # the old argument: the main keys only
+    assert "1/2" not in menv.labels() and any(lb.startswith("🧰 Ещё (") for lb in menv.labels())

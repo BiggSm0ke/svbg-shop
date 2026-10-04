@@ -202,8 +202,8 @@ async def test_reorder_is_two_sql(env: BillingEnv) -> None:
         await env.checkout.reorder(first.order_id, await env.user())
 
 
-def test_refusals_speak_the_users_language() -> None:
-    assert "Open it again" in BillingError("order_gone").localized("en")
+def test_refusals_are_russian_whatever_language_is_passed() -> None:
+    assert "Откройте её заново" in BillingError("order_gone").localized("en")
     assert BillingError("order_gone").localized("ru") == BillingError("order_gone").text
-    custom = BillingError("topup_amount", "Сумма пополнения — от 10 ₽")
-    assert custom.localized("en") == custom.text
+    custom = BillingError("topup_amount", "Сумма пополнения — от 10 ₽", "From 10 RUB")
+    assert custom.localized("en") == custom.text == "Сумма пополнения — от 10 ₽"

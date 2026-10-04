@@ -20,6 +20,7 @@ from svbg.core.settings.registry import (
     EXTENSION_MODULES,
     MODULES_SECTION,
     PAYMENTS_SECTION,
+    RETIRED_KEYS,
     Apply,
     Registry,
     SettingDef,
@@ -260,8 +261,6 @@ REQUESTED: dict[str, tuple[str, Any, str, Apply, float | None, float | None, set
     "PRICING_ROUNDING": ("bool", False, "sales", Apply.HOT, None, None, set()),
     "ONBOARDING_ASK_REFERRAL_CODE": ("bool", False, "sales", Apply.HOT, None, None, set()),
     "ONBOARDING_RULES": ("enum", "off", "sales", Apply.HOT, None, None, set()),
-    "I18N_AVAILABLE": ("list[str]", ["ru", "en"], "system", Apply.HOT, None, None, set()),
-    "I18N_ASK_ON_START": ("bool", False, "system", Apply.HOT, None, None, set()),
     "MAINTENANCE_MESSAGE": ("str", None, "system", Apply.HOT, None, None, {"nullable"}),
     "REMNAWAVE_ALLOW_PLAIN_HTTP": ("bool", False, "remnawave", Apply.RELOAD, None, None, {"owner_only"}),
     "CATALOG_LOCATIONS_SYNC_MINUTES": ("int", 10, "remnawave", Apply.RESTART, 1, 1440, {"owner_only"}),
@@ -323,7 +322,6 @@ def test_no_site_payment_section(reg: Registry) -> None:
         ("PANEL_USERNAME_PREFIX", "a-b", "a b"),
         ("PANEL_DESCRIPTION_TEMPLATE", "{full_name} @{tg_username} ({telegram_id})", "{username}"),
         ("PANEL_DESCRIPTION_TEMPLATE", "sv:{public_id}", "x" * 201),
-        ("I18N_AVAILABLE", "ru, en", "ru, de"),
         ("IMPORT_SOURCE_DSN", "postgresql://ro:p@old:5432/bedolaga", "mysql://x"),
         ("ONBOARDING_RULES", "on", "maybe"),
         ("CAPTCHA_EMOJIS", "🍎, 🍌", "🍎"),
@@ -340,16 +338,12 @@ def test_validators(reg: Registry, key: str, good: str, bad: str) -> None:
         values.parse(defn, bad)
 
 
-def test_default_language_must_be_available(reg: Registry) -> None:
-    snap = {d.key: d.default for d in reg.all()}
-    checks = reg.checks
-    bad = {**snap, "I18N_AVAILABLE": ["en"], "DEFAULT_LANGUAGE": "ru"}
-    errors = {k: v for c in checks for k, v in c(bad, frozenset({"I18N_AVAILABLE"})).items()}
-    assert set(errors) == {"I18N_AVAILABLE"} and "язык по умолчанию" in errors["I18N_AVAILABLE"]
-    errors = {k: v for c in checks for k, v in c(bad, frozenset({"DEFAULT_LANGUAGE"})).items()}
-    assert set(errors) == {"DEFAULT_LANGUAGE"}
-    empty = {**snap, "I18N_AVAILABLE": [], "DEFAULT_LANGUAGE": "en"}
-    assert not any(c(empty, frozenset({"I18N_AVAILABLE"})) for c in checks)
+def test_language_keys_are_retired(reg: Registry) -> None:
+    """The bot is Russian-only: no language settings, and their old names are listed as retired."""
+    assert {"DEFAULT_LANGUAGE", "I18N_AVAILABLE", "I18N_ASK_ON_START"} <= RETIRED_KEYS
+    assert not RETIRED_KEYS & set(reg.keys())
+    assert all(reg.find(key) is None for key in RETIRED_KEYS)
+    assert not [d.key for d in reg.all() if "language" in d.tags or "язык" in d.tags]
 
 
 def test_secret_keys(reg: Registry) -> None:

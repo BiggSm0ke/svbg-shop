@@ -137,7 +137,7 @@ _R: Final = {
     "channel_id": "ID канала «{v}» не число — укажите канал в мастере",
     "template": "шаблон имени панели «{v}» не вида <префикс>{{telegram_id}}",
     "unchanged_key": "учтено при расчёте других настроек",
-    "lang": "язык «{v}» не поддерживается — оставлен ru",
+    "russian_only": "бот работает только на русском, настройки языка не переносятся",
     "renewal": "периоды продления отличаются от периодов покупки — в SvBG они общие",
     "sales_mode": "режим продаж «{v}» не classic — в SvBG один план",
     "traffic_mode": "режим выбора трафика «{v}» не fixed — в SvBG трафик задаётся планом",
@@ -938,19 +938,9 @@ def _onboarding_i18n(ctx: _Ctx) -> None:
     skip_rules = ctx.conv("SKIP_RULES_ACCEPT", to_bool)
     if skip_rules is not None:
         ctx.set("ONBOARDING_RULES", "off" if skip_rules else "on", "SKIP_RULES_ACCEPT")
-    lang = ctx.present("DEFAULT_LANGUAGE")
-    if lang is not None:
-        code = lang.lower()[:2]
-        if code in ("ru", "en"):
-            ctx.set("DEFAULT_LANGUAGE", code, "DEFAULT_LANGUAGE")
-        else:
-            ctx.skip("DEFAULT_LANGUAGE", _R["lang"].format(v=lang), "invalid")
-    langs = ctx.conv("AVAILABLE_LANGUAGES", to_str_list)
-    if langs:
-        ctx.set("I18N_AVAILABLE", [x.lower() for x in langs], "AVAILABLE_LANGUAGES")
-    ask = ctx.conv("LANGUAGE_SELECTION_ENABLED", to_bool)
-    if ask is not None:
-        ctx.set("I18N_ASK_ON_START", ask, "LANGUAGE_SELECTION_ENABLED")
+    for key in ("DEFAULT_LANGUAGE", "AVAILABLE_LANGUAGES", "LANGUAGE_SELECTION_ENABLED"):
+        if ctx.get(key) is not None:
+            ctx.skip(key, _R["russian_only"])
 
 
 def _cash_enabled(ctx: _Ctx, key: str) -> bool | None:

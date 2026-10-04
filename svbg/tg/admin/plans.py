@@ -125,17 +125,16 @@ RESET_LABELS: Final = {
 }
 
 _T: Final[dict[str, str]] = {
-    "list_title": "📦 <b>Тарифы</b>",
     "list_hint": "Нажмите на тариф, чтобы изменить его. Покупатели видят только тарифы «в продаже».",
     "list_empty": "Тарифов пока нет. Создайте свой или возьмите готовый пресет.",
     "new": "➕ Новый тариф",
     "preset": "⭐ Пресет «Стандарт» 179–1699 ₽",
     "locations": "📍 Локации",
-    "back": "⬅️ Назад",
+    "to_locations": "⬅️ Локации",
     "trial": "🎁 Пробный период",
     "rules": "⚙️ Правила подписки",
-    "to_list": "⬅️ К тарифам",
-    "to_card": "⬅️ К тарифу",
+    "to_list": "⬅️ Тарифы",
+    "to_card": "⬅️ Тариф",
     "st_trial_on": "🎁 Пробный тариф · включён",
     "st_trial_off": "🎁 Пробный тариф · выключен",
     "st_broken": "⚠️ Скрыт: {reason}",
@@ -210,7 +209,6 @@ _T: Final[dict[str, str]] = {
     "dv_addon": "💳 Доплата за доп. устройство",
     "dv_addon_off": "🚫 Выключить доплату",
     "dv_addon_hint": "Доплата доступна, когда в тариф включено конкретное число устройств.",
-    "loc_title": "📍 <b>Локации</b>",
     "loc_hint": "Это сквады панели. Название и флаг видят покупатели.",
     "loc_none": "Локаций пока нет: нажмите «🔄 Обновить из панели».",
     "loc_members": "{n} польз.",
@@ -547,19 +545,22 @@ class PlanScreens:
 
     def list_view(self, user: Any = None) -> View:
         snap, cur = self.snap, self.currency()
-        lines = [_T["list_title"], "", _T["list_hint"] if snap.plans else _T["list_empty"]]
+        lines = [nav.header(SCREEN_LIST), "", _T["list_hint"] if snap.plans else _T["list_empty"]]
         rows: list[list[InlineKeyboardButton]] = []
         for plan in snap.plans:
             prices = price_range(plan, cur)
             label = f"{status_icon(plan, cur)} {plan.title(self.lang)}" + (f" · {prices}" if prices else "")
             rows.append([nav_button(label[:64], SCREEN_CARD, arg=str(plan.id))])
-        rows.append([nav_button(_T["new"], ACTIONS, "new")])
         if snap.by_code(STANDARD_CODE) is None and cur == "RUB":  # the owner's preset is in rubles
             rows.append([nav_button(_T["preset"], ACTIONS, "preset")])
-        rows.append([nav_button(_T["locations"], SCREEN_LOCATIONS)])
+        rows.append([nav_button(_T["new"], ACTIONS, "new"), nav_button(_T["locations"], SCREEN_LOCATIONS)])
         if user is not None and _settings_allowed(user) and nav.has_screen(self.router, SLICE_SCREEN):
-            rows.append([nav_button(_T["trial"], SLICE_SCREEN, arg="p.trial")])
-            rows.append([nav_button(_T["rules"], SLICE_SCREEN, arg="p.more")])
+            rows.append(
+                [
+                    nav_button(_T["trial"], SLICE_SCREEN, arg="p.trial"),
+                    nav_button(_T["rules"], SLICE_SCREEN, arg="p.more"),
+                ]
+            )
         rows.append(nav.back_row(SCREEN_LIST))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
@@ -639,7 +640,7 @@ class PlanScreens:
         else:
             toggle = _T["b_enable_trial"] if plan.is_trial else _T["b_enable"]
         rows.append([nav_button(toggle, ACTIONS, "en", pid)])
-        rows.append([nav_button(_T["to_list"], SCREEN_LIST)])
+        rows.append(nav.with_admin([nav_button(_T["to_list"], SCREEN_LIST)]))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     # ------------------------------------------------------------ create, preset, name
@@ -703,7 +704,7 @@ class PlanScreens:
             label = f"{'⭐' if p.highlight else '☆'} {p.days} дн. — {_money(p.amount_minor, cur)}"
             rows.append([nav_button(label, ACTIONS, "phl", arg), nav_button("🗑", ACTIONS, "pdel", arg)])
         rows.append([nav_button(_T["pr_add"], ACTIONS, "padd", str(plan.id))])
-        rows.append([nav_button(_T["to_card"], SCREEN_CARD, arg=str(plan.id))])
+        rows.append(nav.with_admin([nav_button(_T["to_card"], SCREEN_CARD, arg=str(plan.id))]))
         return View(text="\n\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     async def _a_price_add(self, ctx: ScreenCtx, arg: Any) -> View:
@@ -783,7 +784,7 @@ class PlanScreens:
         if snap.locations:
             rows.append([nav_button(_T["sq_save"], ACTIONS, "sqs", f"{plan.id}:{mask:x}:{sig}")])
         rows.append([nav_button(_T["sq_sync"], ACTIONS, "sync", f"sq{plan.id}")])
-        rows.append([nav_button(_T["to_card"], SCREEN_CARD, arg=str(plan.id))])
+        rows.append(nav.with_admin([nav_button(_T["to_card"], SCREEN_CARD, arg=str(plan.id))]))
         return View(text="\n\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     def _new_squads(self, plan: Plan, mask: int) -> tuple[str, ...]:
@@ -912,7 +913,7 @@ class PlanScreens:
             [nav_button(f"{'✅' if plan.availability == k else '▫️'} {v}", ACTIONS, "av", f"{plan.id}:{k}")]
             for k, v in AVAIL_LABELS.items()
         ]
-        rows.append([nav_button(_T["to_card"], SCREEN_CARD, arg=str(plan.id))])
+        rows.append(nav.with_admin([nav_button(_T["to_card"], SCREEN_CARD, arg=str(plan.id))]))
         text = f"{_T['av_title'].format(name=_esc(plan.title(self.lang)))}\n\n{_T['av_hint']}"
         return View(text=text, parse_mode="HTML", keyboard=rows)
 
@@ -931,7 +932,7 @@ class PlanScreens:
             [nav_button(f"{'✅' if plan.reset_strategy == k else '▫️'} {v}", ACTIONS, "rs", f"{plan.id}:{k}")]
             for k, v in RESET_LABELS.items()
         ]
-        rows.append([nav_button(_T["to_card"], SCREEN_CARD, arg=str(plan.id))])
+        rows.append(nav.with_admin([nav_button(_T["to_card"], SCREEN_CARD, arg=str(plan.id))]))
         text = f"{_T['rs_title'].format(name=_esc(plan.title(self.lang)))}\n\n{_T['rs_hint']}"
         return View(text=text, parse_mode="HTML", keyboard=rows)
 
@@ -970,7 +971,7 @@ class PlanScreens:
             rows.append([nav_button(_T["dv_addon"], ACTIONS, "addon", pid)])
         if plan.device_addon is not None:
             rows.append([nav_button(_T["dv_addon_off"], ACTIONS, "aoff", pid)])
-        rows.append([nav_button(_T["to_card"], SCREEN_CARD, arg=pid)])
+        rows.append(nav.with_admin([nav_button(_T["to_card"], SCREEN_CARD, arg=pid)]))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     async def _a_devices(self, ctx: ScreenCtx, arg: Any) -> View:
@@ -1048,9 +1049,9 @@ class PlanScreens:
 
     def locations_view(self, note: str | None = None) -> View:
         snap = self.snap
-        lines = [_T["loc_title"], _T["loc_hint"] if snap.locations else _T["loc_none"]]
+        lines = [nav.header(SCREEN_LOCATIONS), "", _T["loc_hint"] if snap.locations else _T["loc_none"]]
         if note:
-            lines.insert(0, note)
+            lines[1:1] = ["", note]
         rows: list[list[InlineKeyboardButton]] = []
         for loc in snap.locations:
             extra = _T["loc_members"].format(n=loc.members) if loc.members is not None else ""
@@ -1059,7 +1060,7 @@ class PlanScreens:
             label = loc.label(self.lang) + (f" · {extra}" if extra else "")
             rows.append([nav_button(label[:64], SCREEN_LOCATION, arg=loc.squad_uuid)])
         rows.append([nav_button(_T["sq_sync"], ACTIONS, "sync")])
-        rows.append([nav_button(_T["to_list"], SCREEN_LIST)])
+        rows.append(nav.with_admin([nav_button(_T["to_list"], SCREEN_LIST)]))
         return View(text="\n\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     def _location(self, arg: Any, *, screen: bool = True) -> Location:
@@ -1092,7 +1093,7 @@ class PlanScreens:
         ]
         if loc.flag:
             rows.append([nav_button(_T["loc_noflag"], ACTIONS, "lnof", loc.squad_uuid)])
-        rows.append([nav_button(_T["back"], SCREEN_LOCATIONS)])
+        rows.append(nav.with_admin([nav_button(_T["to_locations"], SCREEN_LOCATIONS)]))
         return View(text=text, parse_mode="HTML", keyboard=rows)
 
     async def _a_location_name(self, ctx: ScreenCtx, arg: Any) -> View:

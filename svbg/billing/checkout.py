@@ -40,7 +40,7 @@ from svbg.billing.config import BillingConfig, ConfigSource
 from svbg.billing.kinds import enqueue_fulfill
 from svbg.billing.ports import UiRef
 from svbg.billing.tables import order_items, orders, users_wallet
-from svbg.billing.texts import ERRORS, ERRORS_EN, money
+from svbg.billing.texts import ERRORS, money
 from svbg.core.clock import now
 from svbg.domain.pricing import Discount, PricingError, Quote, purchase_kind, quote_devices, quote_plan
 from svbg.domain.wallet_rules import shortfall, stars_quote
@@ -92,21 +92,16 @@ _SWEEP_BATCH: Final = 1000
 
 
 class BillingError(Exception):
-    """A refused checkout step; ``text`` is shown to the user (Russian, :meth:`localized` for others)."""
+    """A refused checkout step; ``text`` is shown to the user (Russian). A third argument (an old English
+    translation) is accepted and ignored."""
 
-    def __init__(self, code: str, text: str | None = None, text_en: str | None = None) -> None:
+    def __init__(self, code: str, text: str | None = None, _unused: str | None = None) -> None:
         self.code = code
-        self._custom = text is not None
         self.text = text or ERRORS.get(code, "Не получилось. Попробуйте ещё раз.")
-        self.text_en = text_en
         super().__init__(f"{code}: {self.text}")
 
-    def localized(self, lang: str | None) -> str:
-        """The refusal in the user's language (a custom text — limits, pricing — only with ``text_en``)."""
-        if lang == "en":
-            if self._custom:
-                return self.text_en or self.text
-            return ERRORS_EN.get(self.code) or "Something went wrong. Please try again."
+    def localized(self, _lang: str | None = None) -> str:
+        """The refusal text (kept for old callers that pass a language; always Russian)."""
         return self.text
 
 
@@ -348,7 +343,6 @@ class CheckoutService:
                 extra_devices=extra_devices,
                 link_code=link_code,
                 discounts=discounts,
-                lang=lang,
             )
 
     async def _draft_plan_in(
@@ -362,7 +356,6 @@ class CheckoutService:
         extra_devices: int = 0,
         link_code: str | None = None,
         discounts: Sequence[Discount] = (),
-        lang: str | None = None,
     ) -> Draft:
         cfg = self.config
         snap = self._catalog.snapshot
@@ -392,18 +385,18 @@ class CheckoutService:
                 extra_devices=extra_devices,
                 discounts=discounts,
                 subscription_id=facts["sub_id"],
-                lang=lang,
             )
         except PricingError as e:
-            raise BillingError("pricing", str(e), e.en) from None
+            raise BillingError("pricing", str(e)) from None
         order_id, public_id = await self._insert_draft(conn, user_id, quote)
         return Draft(order_id, public_id, quote, int(facts["wallet_minor"] or 0))
 
     async def draft_devices(self, user_id: int, count: int, *, lang: str | None = None) -> Draft:
-        """Extra devices until the end of the current period (``addon_devices``, 2 SQL)."""
+        """Extra devices until the end of the current period (``addon_devices``, 2 SQL). ``lang`` is accepted
+        for old callers and ignored."""
         async with self._db.tx() as conn:
             facts = (await conn.execute(_facts_query(user_id))).mappings().first()
-            return await self._draft_devices_in(conn, facts, user_id, count, lang=lang)
+            return await self._draft_devices_in(conn, facts, user_id, count)
 
     async def _draft_devices_in(
         self,
@@ -411,16 +404,10 @@ class CheckoutService:
         facts: Mapping[str, Any] | None,
         user_id: int,
         count: int,
-        *,
-        lang: str | None = None,
     ) -> Draft:
         cfg = self.config
         if facts is None or facts["sub_id"] is None or facts["is_trial"]:
-            raise BillingError(
-                "plan_unavailable",
-                "Докупка устройств доступна для оплаченной подписки.",
-                "Adding devices is available for a paid subscription.",
-            )
+            raise BillingError("plan_unavailable", "Докупка устройств доступна для оплаченной подписки.")
         plan = self._catalog.snapshot.plan(facts["plan_id"])
         addon = plan.addon if plan is not None else None
         device_limit = plan.device_limit if plan is not None else None
@@ -435,10 +422,10 @@ class CheckoutService:
                 currency=cfg.currency,
                 plan_snapshot=dict(facts["plan_snapshot"] or {}),
                 subscription_id=int(facts["sub_id"]),
-                title=plan.title(lang) if plan is not None else "",
+                title=plan.title() if plan is not None else "",
             )
         except PricingError as e:
-            raise BillingError("pricing", str(e), e.en) from None
+            raise BillingError("pricing", str(e)) from None
         order_id, public_id = await self._insert_draft(conn, user_id, quote)
         return Draft(order_id, public_id, quote, int(facts["wallet_minor"] or 0))
 
@@ -452,7 +439,7 @@ class CheckoutService:
             snap = facts["src_snapshot"] or {}
             if facts["src_kind"] == "addon_devices":
                 count = int(snap.get("extra_devices") or 1)
-                return await self._draft_devices_in(conn, facts, user_id, count, lang=lang)
+                return await self._draft_devices_in(conn, facts, user_id, count)
             plan_id, days = snap.get("plan_id"), snap.get("days")
             if not isinstance(plan_id, int) or not isinstance(days, int):
                 raise BillingError("plan_unavailable")
@@ -463,7 +450,6 @@ class CheckoutService:
                 plan_id,
                 days,
                 extra_devices=int(snap.get("extra_devices") or 0),
-                lang=lang,
             )
 
     # --------------------------------------------------------------------------------------------- pay
@@ -621,7 +607,7 @@ class CheckoutService:
         lang: str | None = None,
     ) -> TopupResult:
         """Create a top-up and its invoice (07 §4.5 step 3) — or hand out the same open invoice again.
-        ``lang``: the language of the invoice description (the title of a Stars invoice).
+        ``lang`` is accepted for old callers and ignored (the invoice description is Russian).
 
         Raises :class:`BillingError` (``order_gone``: the purchase no longer waits for money — the user must
         open it again; ``too_many_invoices``; ``stale_price``…) or the core's ``CheckoutError`` /
@@ -639,8 +625,6 @@ class CheckoutService:
                 "topup_amount",
                 f"Сумма пополнения — от {money(cfg.topup_min_minor, cfg.currency)} "
                 f"до {money(cfg.topup_max_minor, cfg.currency)}.",
-                f"The top-up amount is from {money(cfg.topup_min_minor, cfg.currency, 'en')} "
-                f"to {money(cfg.topup_max_minor, cfg.currency, 'en')}.",
             )
         inst = self._payments.instances.get(instance_id)
         if inst is None or not inst.enabled:
@@ -712,11 +696,7 @@ class CheckoutService:
                     instance_id=instance_id,
                     amount_minor=pay_minor,
                     currency=pay_currency,
-                    description=(
-                        f"Balance top-up of {money(credit_minor, cfg.currency, 'en')}"
-                        if lang == "en"
-                        else f"Пополнение баланса на {money(credit_minor, cfg.currency)}"
-                    ),
+                    description=f"Пополнение баланса на {money(credit_minor, cfg.currency)}",
                     order_id=int(topup_id),
                     method_kind=method_kind,
                 )

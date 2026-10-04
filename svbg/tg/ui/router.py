@@ -632,7 +632,7 @@ class ScreenRouter:
             if held:
                 await self._handle_callback(query)
                 return
-        await self._answer(query.id, texts.t(tg_user.language_code, "busy"), False)
+        await self._answer(query.id, texts.t(None, "busy"), False)
 
     async def _handle_callback(self, query: CallbackQuery) -> None:
         tg_user = query.from_user
@@ -820,8 +820,7 @@ class ScreenRouter:
         async with timeout_guard("ui:user_loader", self.handler_timeout, hub=self.hub, on_error=on_error):
             user = await self.user_loader(tg_user)
         if user is None and callback_id is not None:
-            lang = tg_user.language_code if failed else None
-            await self._answer(callback_id, texts.t(lang, "error_toast") if failed else None, False)
+            await self._answer(callback_id, texts.t(None, "error_toast") if failed else None, False)
         return user
 
     async def _bind_target(self, ctx: ScreenCtx, message: Any) -> None:
@@ -1201,9 +1200,7 @@ class ScreenRouter:
 
     async def _after_step(self, ctx: ScreenCtx, form: Form, step: forms_mod.StepResult) -> None:
         if step.error is not None:
-            await self._deliver(
-                ctx, forms_mod.prompt_view(form, step.state, ctx.lang, error=step.error_for(ctx.lang))
-            )
+            await self._deliver(ctx, forms_mod.prompt_view(form, step.state, ctx.lang, error=step.error))
             return
         if not step.done:
             await self.ui_state.set_awaiting(ctx.user.user_id, step.state.to_json())
@@ -1243,7 +1240,7 @@ class ScreenRouter:
             return
         step = forms_mod.skip(form, state)
         if step.error is not None:
-            await ctx.answer(step.error_for(ctx.lang))
+            await ctx.answer(step.error)
             return
         await ctx.answer()
         await self._after_step(ctx, form, step)

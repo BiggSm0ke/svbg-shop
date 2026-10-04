@@ -1,13 +1,11 @@
 """User- and owner-facing texts of billing (one place; content screens may override the user ones).
 
 Screen ids (system screens of the screen engine, 07 §2.4.1) are the ``SCREEN_*`` constants; the user path
-seeds them with these texts as defaults. User notices exist in Russian and English (``lang`` — the user's
-language, :func:`lang_of`); owner-facing texts («Требует внимания») are Russian.
+seeds them with these texts as defaults. Everything is Russian (the bot has no other language).
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Final
@@ -19,9 +17,6 @@ from svbg.core.money import format_money
 __all__ = [
     "ATTENTION",
     "ERRORS",
-    "ERRORS_EN",
-    "LANGS",
-    "REASONS_EN",
     "SCREEN_CONNECTING",
     "SCREEN_CREDITED",
     "SCREEN_HELD",
@@ -31,8 +26,6 @@ __all__ = [
     "credited_notice",
     "fmt_date",
     "held_notice",
-    "lang_of",
-    "localize_reason",
     "money",
     "paid_notice",
     "refunded_notice",
@@ -58,20 +51,6 @@ ERRORS: Final[Mapping[str, str]] = {
         "Слишком много счетов подряд. Оплатите уже созданный счёт или попробуйте через 10 минут."
     ),
 }
-ERRORS_EN: Final[Mapping[str, str]] = {
-    "not_found": "Order not found. Please open the purchase again.",
-    "not_payable": "This order is already paid or canceled.",
-    "plan_unavailable": "This plan is not available right now.",
-    "topup_amount": "Invalid top-up amount.",
-    "topup_currency": "This payment method is not available right now. Please choose another one.",
-    "no_stars_rate": "Paying with Stars is not available right now.",
-    "order_gone": "This purchase is no longer waiting for payment. Open it again and the price will update.",
-    "stale_price": "The price of this purchase is out of date. Open it again and the price will update.",
-    "too_many_invoices": (
-        "Too many invoices in a row. Pay the one you already have or try again in 10 minutes."
-    ),
-}
-
 ATTENTION: Final[Mapping[str, str]] = {
     "held_title": "Покупка не завершена: подписка заморожена",
     "held_body": (
@@ -115,117 +94,35 @@ ATTENTION: Final[Mapping[str, str]] = {
     ),
 }
 
-#: User-facing fallback texts by language (``ru`` / ``en``); an owner-made content screen overrides them.
-_TEXTS: Final[Mapping[str, Mapping[str, str]]] = {
-    "ru": {
-        "paid": "✅ Оплачено! Подписка «{title}» действует до {until}.",
-        "paid_devices": (
-            "✅ Оплачено! Добавлено устройств: {devices}. Подписка «{title}» действует до {until}."
-        ),
-        "paid_balance": "\nНа балансе осталось {balance}.",
-        "connecting": "✅ Оплачено, подключаем… Сообщение обновится само, как только всё будет готово.",
-        "credited": "💰 Зачислено {amount} на баланс (сейчас {balance}).",
-        "credited_late": "\nАвтоматически покупка уже не пройдёт. Купите сами, когда будет удобно:",
-        "credited_insufficient": "\nДля покупки «{title}» нужно {price}. Пополните ещё на {missing}.",
-        "credited_held": "\nПокупка не завершена: подписка приостановлена. Напишите в поддержку.",
-        "held": (
-            "✅ Оплата получена, но подписка сейчас приостановлена. Покупка «{title}» ждёт решения "
-            "поддержки. Деньги не пропадут: их зачтут в подписку или вернут на баланс."
-        ),
-        "refunded": (
-            "Не получилось оформить «{title}»: {reason}\n{amount} вернулись на баланс (сейчас {balance})."
-        ),
-        "btn_connect": "🔗 Подключиться",
-        "btn_buy": "Купить «{title}» за {price}",
-        "btn_topup": "Пополнить на {missing}",
-        "btn_menu": "Меню",
-    },
-    "en": {
-        "paid": "✅ Paid! Your «{title}» subscription is active until {until}.",
-        "paid_devices": (
-            "✅ Paid! Devices added: {devices}. Your «{title}» subscription is active until {until}."
-        ),
-        "paid_balance": "\nBalance left: {balance}.",
-        "connecting": (
-            "✅ Paid, setting things up… This message will update as soon as everything is ready."
-        ),
-        "credited": "💰 {amount} added to your balance (now {balance}).",
-        "credited_late": "\nThe order is no longer waiting, so buy it yourself whenever you like:",
-        "credited_insufficient": "\n«{title}» costs {price}. Top up {missing} more.",
-        "credited_held": (
-            "\nThe purchase did not go through: your subscription is suspended. Please contact support."
-        ),
-        "held": (
-            "✅ Payment received, but your subscription is suspended right now. The «{title}» purchase is "
-            "waiting for support. Your money is safe: it will go to the subscription or back to your "
-            "balance."
-        ),
-        "refunded": (
-            "Could not complete «{title}»: {reason}\n{amount} returned to your balance (now {balance})."
-        ),
-        "btn_connect": "🔗 Connect",
-        "btn_buy": "Buy «{title}» for {price}",
-        "btn_topup": "Top up {missing}",
-        "btn_menu": "Menu",
-    },
-}
-LANGS: Final = ("ru", "en")
-
-#: English of the refusal reasons that end up in «Не получилось оформить «…»: {reason}» (the reason is
-#: stored in Russian in the order and in the notice payload; matched as a whole, see
-#: :func:`localize_reason`).
-REASONS_EN: Final[Mapping[str, str]] = {
-    "Заказ повреждён.": "The order is corrupted.",
-    "Тариф заказа повреждён.": "The order's plan is corrupted.",
-    "Позиция заказа сейчас недоступна.": "An item in the order is not available right now.",
-    "Неизвестный вид заказа.": "Unknown order type.",
-    "Для этого тарифа докупка устройств недоступна.": "Adding devices is not available for this plan.",
-    "Подписка не найдена или закрыта.": "The subscription was not found or is closed.",
-    "Пользователь не найден.": "User not found.",
-    "Лимит LTE уже обновился — пакет не нужен, деньги вернулись на баланс.": (
-        "The LTE limit has already been renewed, so the pack is not needed. The money is back on the balance."
+#: User-facing fallback texts; an owner-made content screen overrides them.
+_T: Final[Mapping[str, str]] = {
+    "paid": "✅ Оплачено! Подписка «{title}» действует до {until}.",
+    "paid_devices": "✅ Оплачено! Добавлено устройств: {devices}. Подписка «{title}» действует до {until}.",
+    "paid_balance": "\nНа балансе осталось {balance}.",
+    "connecting": "✅ Оплачено, подключаем… Сообщение обновится само, как только всё будет готово.",
+    "credited": "💰 Зачислено {amount} на баланс (сейчас {balance}).",
+    "credited_late": "\nАвтоматически покупка уже не пройдёт. Купите сами, когда будет удобно:",
+    "credited_insufficient": "\nДля покупки «{title}» нужно {price}. Пополните ещё на {missing}.",
+    "credited_held": "\nПокупка не завершена: подписка приостановлена. Напишите в поддержку.",
+    "held": (
+        "✅ Оплата получена, но подписка сейчас приостановлена. Покупка «{title}» ждёт решения "
+        "поддержки. Деньги не пропадут: их зачтут в подписку или вернут на баланс."
     ),
-    "Пакет сейчас недоступен.": "The pack is not available right now.",
-    "Предложение устарело — откройте докупку заново.": "The offer is outdated. Open the top-up again.",
-    "Этот пакет больше не продаётся.": "This pack is no longer on sale.",
+    "refunded": (
+        "Не получилось оформить «{title}»: {reason}\n{amount} вернулись на баланс (сейчас {balance})."
+    ),
+    "btn_connect": "🔗 Подключиться",
+    "btn_buy": "Купить «{title}» за {price}",
+    "btn_topup": "Пополнить на {missing}",
+    "btn_menu": "Меню",
 }
-_MAX_DEVICES_RU: Final = re.compile(r"^Можно не больше (\d+) устройств на подписку\.$")
-
-
-def localize_reason(reason: str, lang: str | None) -> str:
-    """A stored Russian refusal reason in ``lang``; an unknown reason stays as it is."""
-    if lang != "en":
-        return reason
-    if reason in REASONS_EN:
-        return REASONS_EN[reason]
-    found = _MAX_DEVICES_RU.match(reason)
-    if found:
-        return f"No more than {found.group(1)} devices per subscription."
-    return reason
-
-
-#: The Russian texts (kept for callers that read them directly).
-_T: Final = _TEXTS["ru"]
-
-
-def lang_of(language: str | None, default: str | None = None) -> str:
-    """The user's language among :data:`LANGS` (``default`` — ``DEFAULT_LANGUAGE`` — otherwise ``ru``)."""
-    for value in (language, default):
-        code = (value or "").strip().lower()[:2]
-        if code in LANGS:
-            return code
-    return "ru"
-
-
-def _tx(lang: str) -> Mapping[str, str]:
-    return _TEXTS.get(lang) or _T
 
 
 DEFAULT_TZ: Final = "Europe/Moscow"
 
 
-def money(amount_minor: int, currency: str, lang: str = "ru") -> str:
-    return format_money(amount_minor, currency, lang, nbsp=True)
+def money(amount_minor: int, currency: str, _lang: str | None = None) -> str:
+    return format_money(amount_minor, currency, nbsp=True)
 
 
 def fmt_date(value: datetime | None, tz: str | None = None) -> str:
@@ -239,8 +136,8 @@ def fmt_date(value: datetime | None, tz: str | None = None) -> str:
     return value.astimezone(zone).strftime("%d.%m.%Y")
 
 
-def _menu(lang: str = "ru") -> tuple[Button, ...]:
-    return (Button(_tx(lang)["btn_menu"], action="menu"),)
+def _menu() -> tuple[Button, ...]:
+    return (Button(_T["btn_menu"], action="menu"),)
 
 
 def paid_notice(
@@ -252,33 +149,32 @@ def paid_notice(
     currency: str,
     tz: str | None,
     devices: int | None = None,
-    lang: str = "ru",
 ) -> Notice:
     """«✅ Оплачено …» + «🔗 Подключиться» (the subscription page as a WebApp); ``devices``: an addon."""
-    tx = _tx(lang)
+    tx = _T
     until_text = fmt_date(until, tz)
     if devices:
         text = tx["paid_devices"].format(title=title, until=until_text, devices=devices)
     else:
         text = tx["paid"].format(title=title, until=until_text)
     if balance_minor > 0:
-        text += tx["paid_balance"].format(balance=money(balance_minor, currency, lang))
+        text += tx["paid_balance"].format(balance=money(balance_minor, currency))
     return Notice(
         SCREEN_PAID,
         text,
-        ((Button(tx["btn_connect"], web_app=subscription_url),), _menu(lang)),
+        ((Button(tx["btn_connect"], web_app=subscription_url),), _menu()),
         {"title": title, "until": until_text, "subscription_url": subscription_url, "devices": devices or 0},
     )
 
 
-def connecting_notice(*, title: str, lang: str = "ru") -> Notice:
-    return Notice(SCREEN_CONNECTING, _tx(lang)["connecting"], (), {"title": title})
+def connecting_notice(*, title: str) -> Notice:
+    return Notice(SCREEN_CONNECTING, _T["connecting"], (), {"title": title})
 
 
-def held_notice(*, title: str, lang: str = "ru") -> Notice:
+def held_notice(*, title: str) -> Notice:
     """A paid purchase waits for the owner's decision (the user's subscription is frozen / the user is
     banned): the money is safe."""
-    return Notice(SCREEN_HELD, _tx(lang)["held"].format(title=title), (_menu(lang),), {"title": title})
+    return Notice(SCREEN_HELD, _T["held"].format(title=title), (_menu(),), {"title": title})
 
 
 def credited_notice(
@@ -290,15 +186,14 @@ def credited_notice(
     order_id: int | None = None,
     title: str | None = None,
     price_minor: int | None = None,
-    lang: str = "ru",
 ) -> Notice:
     """«💰 Зачислено X ₽ на баланс (сейчас Y ₽)» + what to do next. ``reason``: ``late`` (window over or the
     purchase was replaced), ``insufficient`` (still not enough), ``held`` (frozen), ``None`` (plain
     top-up)."""
-    tx = _tx(lang)
+    tx = _T
     params: dict[str, Any] = {
-        "amount": money(amount_minor, currency, lang),
-        "balance": money(balance_minor, currency, lang),
+        "amount": money(amount_minor, currency),
+        "balance": money(balance_minor, currency),
         "reason": reason or "",
     }
     text = tx["credited"].format(**params)
@@ -306,11 +201,11 @@ def credited_notice(
     if reason == "held":
         text += tx["credited_held"]
     elif order_id is not None and title and price_minor is not None:
-        price = money(price_minor, currency, lang)
+        price = money(price_minor, currency)
         params.update(title=title, price=price, order_id=order_id)
         if reason == "insufficient":
             missing = max(0, price_minor - balance_minor)
-            params["missing"] = money(missing, currency, lang)
+            params["missing"] = money(missing, currency)
             text += tx["credited_insufficient"].format(title=title, price=price, missing=params["missing"])
             rows.append(
                 (
@@ -333,17 +228,17 @@ def credited_notice(
                     ),
                 )
             )
-    rows.append(_menu(lang))
+    rows.append(_menu())
     return Notice(SCREEN_CREDITED, text, tuple(rows), params)
 
 
 def refunded_notice(
-    *, title: str, reason: str, amount_minor: int, balance_minor: int, currency: str, lang: str = "ru"
+    *, title: str, reason: str, amount_minor: int, balance_minor: int, currency: str
 ) -> Notice:
-    text = _tx(lang)["refunded"].format(
+    text = _T["refunded"].format(
         title=title,
-        reason=localize_reason(reason, lang),
-        amount=money(amount_minor, currency, lang),
-        balance=money(balance_minor, currency, lang),
+        reason=reason,
+        amount=money(amount_minor, currency),
+        balance=money(balance_minor, currency),
     )
-    return Notice(SCREEN_REFUNDED, text, (_menu(lang),), {"title": title, "reason": reason})
+    return Notice(SCREEN_REFUNDED, text, (_menu(),), {"title": title, "reason": reason})

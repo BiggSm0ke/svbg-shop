@@ -54,7 +54,7 @@ async def test_off_costs_nothing(env: Env) -> None:
     before = env.db.queries
     view = await env.svc.invite_view(uid, "en")
     assert env.db.queries == before
-    assert not view.enabled and view.lines == ("The referral program is off right now.",)
+    assert not view.enabled and view.lines == ("Реферальная программа сейчас выключена.",)
 
 
 async def test_no_bot_username_no_link(env: Env) -> None:
@@ -96,9 +96,10 @@ def test_reward_lines_follow_the_rules(rules: Rules, expected: list[str]) -> Non
     assert ReferralService.reward_lines(rules, "ru") == expected
 
 
-def test_reward_lines_english() -> None:
+def test_reward_lines_are_russian_whatever_language_is_passed() -> None:
     lines = ReferralService.reward_lines(Rules(enabled=True, trigger=Trigger.PAID), "en-US")
-    assert lines[1] == "• You get <b>+14 days</b> for every friend who subscribes"
+    assert lines == ReferralService.reward_lines(Rules(enabled=True, trigger=Trigger.PAID))
+    assert lines[1].startswith("• Вы получаете <b>+14 дн.</b>")
 
 
 def test_qr_png() -> None:

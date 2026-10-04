@@ -6,7 +6,7 @@ The codec of the ``start`` parameter (≤ 64 characters ``[A-Za-z0-9_-]``): dire
 setup and is consumed by an earlier router.
 
 Stage 2 only *parses* the payload and keeps it as ``ui_state.pending_intent`` (the intent survives onboarding:
-channel check, language), so stage 3b can act on it without changing ``/start``.
+captcha, channel check), so stage 3b can act on it without changing ``/start``.
 """
 
 from __future__ import annotations

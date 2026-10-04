@@ -132,10 +132,10 @@ def test_size_and_depth_limits() -> None:
     deep: dict[str, Any] = {"sub": "active"}
     for _ in range(MAX_DEPTH + 1):
         deep = {"not": deep}
-    with pytest.raises(ConditionError, match="deeply"):
+    with pytest.raises(ConditionError, match="вложенность"):
         compile_condition(deep)
     wide = {"any": [{"all": [{"sub": "active"}] * 50} for _ in range(5)]}
-    with pytest.raises(ConditionError, match="too large"):
+    with pytest.raises(ConditionError, match="слишком большое"):
         compile_condition(wide)
 
 

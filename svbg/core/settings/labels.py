@@ -42,7 +42,6 @@ CHOICE_LABELS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
         "BOT_MODE": {"polling": "Опрос (домен не нужен)", "webhook": "Вебхук (нужен домен)"},
         "ENV_LAYOUT": {"full": "Все ключи", "compact": "Только заданные"},
         "ENV_SECRETS": {"plain": "Хранить в файле", "omit": "Только в базе"},
-        "DEFAULT_LANGUAGE": {"ru": "Русский", "en": "English"},
         "LTE_ENFORCE": {"on": "Включено", "shadow": "Тень (только журнал)", "off": "Выключено"},
         "LTE_OFF_ACTION": {"keep": "Оставить блоки", "release": "Снять блоки"},
     }

@@ -199,25 +199,25 @@ Action = (
 
 def _name(value: Any, path: str) -> str:
     if not isinstance(value, str) or not _NAME_RE.match(value):
-        raise ContentError(path, "expected a short name [A-Za-z0-9_.-], up to 32 chars")
+        raise ContentError(path, "нужно короткое имя латиницей [A-Za-z0-9_.-], до 32 символов")
     return value
 
 
 def _url(value: Any, path: str, *, https_only: bool = False) -> str:
     if not isinstance(value, str) or not value or len(value) > MAX_URL or any(c.isspace() for c in value):
-        raise ContentError(path, f"expected a URL without spaces, up to {MAX_URL} chars")
+        raise ContentError(path, f"нужна ссылка без пробелов, до {MAX_URL} символов")
     parts = urlsplit(value)
     if https_only:
         if parts.scheme != "https" or not parts.netloc:
-            raise ContentError(path, "Web App URL must start with https://")
+            raise ContentError(path, "ссылка Web App должна начинаться с https://")
     elif parts.scheme not in _URL_SCHEMES or (parts.scheme != "tg" and not parts.netloc):
-        raise ContentError(path, "URL must start with https://, http:// or tg://")
+        raise ContentError(path, "ссылка должна начинаться с https://, http:// или tg://")
     return value
 
 
 def _text(value: Any, path: str, limit: int) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > limit:
-        raise ContentError(path, f"expected non-empty text up to {limit} chars")
+        raise ContentError(path, f"нужен непустой текст до {limit} символов")
     return value
 
 
@@ -226,11 +226,11 @@ def parse_action(value: Any, path: str = "action") -> Action:
     if isinstance(value, str):
         kind, sep, rest = value.partition(":")
         if not sep:
-            raise ContentError(path, "expected '<type>:<value>'")
+            raise ContentError(path, "нужно '<тип>:<значение>'")
         if kind == "module":
             ext, dot, act = rest.partition(".")
             if not dot:
-                raise ContentError(path, "module action must be 'module:<ext>.<action>'")
+                raise ContentError(path, "действие модуля пишется так: 'module:<модуль>.<действие>'")
             value = {"type": "module", "ext": ext, "action": act}
         else:
             key = {
@@ -243,17 +243,17 @@ def parse_action(value: Any, path: str = "action") -> Action:
                 "share": "text",
             }.get(kind)
             if key is None:
-                raise ContentError(path, f"unknown action type '{kind}'")
+                raise ContentError(path, f"неизвестный тип действия '{kind}'")
             value = {"type": kind, key: rest}
     if not isinstance(value, Mapping):
-        raise ContentError(path, "expected an object")
+        raise ContentError(path, "нужен объект")
     kind = value.get("type")
     if kind == "screen":
         target = value.get("target")
         if isinstance(target, int) and not isinstance(target, bool) and target > 0:
             target = str(target)
         if not isinstance(target, str) or not _SCREEN_REF_RE.match(target):
-            raise ContentError(f"{path}.target", "expected a screen code or id")
+            raise ContentError(f"{path}.target", "нужен код или номер экрана")
         return ScreenAction(target)
     if kind == "system":
         return SystemAction(_name(value.get("name"), f"{path}.name"))
@@ -264,7 +264,7 @@ def parse_action(value: Any, path: str = "action") -> Action:
     if kind == "deeplink":
         code = value.get("code")
         if not isinstance(code, str) or not _DEEPLINK_RE.match(code):
-            raise ContentError(f"{path}.code", "expected [A-Za-z0-9_-], up to 64 chars")
+            raise ContentError(f"{path}.code", "нужно [A-Za-z0-9_-], до 64 символов")
         return DeeplinkAction(code)
     if kind == "copy":
         return CopyAction(_text(value.get("text"), f"{path}.text", MAX_COPY_TEXT))
@@ -274,7 +274,7 @@ def parse_action(value: Any, path: str = "action") -> Action:
         return ModuleAction(
             _name(value.get("ext"), f"{path}.ext"), _name(value.get("action"), f"{path}.action")
         )
-    raise ContentError(f"{path}.type", f"unknown action type {kind!r}")
+    raise ContentError(f"{path}.type", f"неизвестный тип действия {kind!r}")
 
 
 # ---------------------------------------------------------------- texts
@@ -290,7 +290,7 @@ class TextBlock:
 
 def _lang(value: Any, path: str) -> str:
     if not isinstance(value, str) or not _LANG_RE.match(value):
-        raise ContentError(path, "expected a language code like 'ru' or 'en'")
+        raise ContentError(path, "нужен код языка, например 'ru'")
     return value
 
 
@@ -302,14 +302,14 @@ def _entities(value: Any, path: str, text_len16: int) -> tuple[Mapping[str, Any]
     if value is None:
         return ()
     if not isinstance(value, list) or len(value) > MAX_ENTITIES:
-        raise ContentError(path, f"expected a list of up to {MAX_ENTITIES} entities")
+        raise ContentError(path, f"нужен список до {MAX_ENTITIES} элементов форматирования")
     out: list[Mapping[str, Any]] = []
     for i, raw in enumerate(value):
         p = f"{path}[{i}]"
         if not isinstance(raw, Mapping):
-            raise ContentError(p, "expected an object")
+            raise ContentError(p, "нужен объект")
         if raw.get("type") not in _ENTITY_TYPES:
-            raise ContentError(f"{p}.type", f"unknown entity type {raw.get('type')!r}")
+            raise ContentError(f"{p}.type", f"неизвестный тип форматирования {raw.get('type')!r}")
         offset, length = raw.get("offset"), raw.get("length")
         if (
             isinstance(offset, bool)
@@ -320,14 +320,14 @@ def _entities(value: Any, path: str, text_len16: int) -> tuple[Mapping[str, Any]
             or length <= 0
             or offset + length > text_len16
         ):
-            raise ContentError(p, "entity offset/length is outside the text")
+            raise ContentError(p, "форматирование выходит за пределы текста")
         clean = {k: v for k, v in raw.items() if k in _ENTITY_KEYS}
         if clean["type"] == "text_link":
             clean["url"] = _url(raw.get("url"), f"{p}.url")
         if clean["type"] == "custom_emoji" and not (
             isinstance(raw.get("custom_emoji_id"), str) and _EMOJI_ID_RE.match(raw["custom_emoji_id"])
         ):
-            raise ContentError(f"{p}.custom_emoji_id", "expected a numeric custom emoji id")
+            raise ContentError(f"{p}.custom_emoji_id", "нужен числовой id премиум-эмодзи")
         out.append(MappingProxyType(clean))
     return tuple(out)
 
@@ -337,17 +337,17 @@ def parse_text_blocks(value: Any, path: str = "body") -> Mapping[str, TextBlock]
     if value is None:
         return MappingProxyType({})
     if not isinstance(value, Mapping):
-        raise ContentError(path, "expected an object {lang: {text, entities}}")
+        raise ContentError(path, "нужен объект {язык: {text, entities}}")
     out: dict[str, TextBlock] = {}
     for lang, block in value.items():
         p = f"{path}.{lang}"
         _lang(lang, p)
         item: Any = {"text": block} if isinstance(block, str) else block
         if not isinstance(item, Mapping):
-            raise ContentError(p, "expected {text, entities}")
+            raise ContentError(p, "нужно {text, entities}")
         text = item.get("text", "")
         if not isinstance(text, str) or len(text) > MAX_TEXT:
-            raise ContentError(f"{p}.text", f"expected text up to {MAX_TEXT} chars")
+            raise ContentError(f"{p}.text", f"нужен текст до {MAX_TEXT} символов")
         out[lang] = TextBlock(text, _entities(item.get("entities"), f"{p}.entities", _utf16_len(text)))
     return MappingProxyType(out)
 
@@ -358,12 +358,12 @@ def _str_by_lang(value: Any, path: str, limit: int) -> Mapping[str, str]:
     if isinstance(value, str):  # a single string means the default language
         value = {"ru": value}
     if not isinstance(value, Mapping):
-        raise ContentError(path, "expected an object {lang: text}")
+        raise ContentError(path, "нужен объект {язык: текст}")
     out: dict[str, str] = {}
     for lang, text in value.items():
         _lang(lang, f"{path}.{lang}")
         if not isinstance(text, str) or len(text) > limit:
-            raise ContentError(f"{path}.{lang}", f"expected text up to {limit} chars")
+            raise ContentError(f"{path}.{lang}", f"нужен текст до {limit} символов")
         out[lang] = text
     return MappingProxyType(out)
 
@@ -371,7 +371,7 @@ def _str_by_lang(value: Any, path: str, limit: int) -> Mapping[str, str]:
 def parse_label(value: Any, path: str = "label") -> Mapping[str, str]:
     labels = _str_by_lang(value, path, MAX_LABEL)
     if not any(t.strip() for t in labels.values()):
-        raise ContentError(path, "button needs a label in at least one language")
+        raise ContentError(path, "у кнопки должна быть подпись")
     return labels
 
 
@@ -411,9 +411,9 @@ class Button:
 
     def __post_init__(self) -> None:
         if self.style is not None and self.style not in BUTTON_STYLES:
-            raise ContentError("style", f"expected one of {', '.join(BUTTON_STYLES)}")
+            raise ContentError("style", f"нужно одно из: {', '.join(BUTTON_STYLES)}")
         if self.icon_custom_emoji_id is not None and not _EMOJI_ID_RE.match(self.icon_custom_emoji_id):
-            raise ContentError("icon_custom_emoji_id", "expected a numeric custom emoji id")
+            raise ContentError("icon_custom_emoji_id", "нужен числовой id премиум-эмодзи")
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> Button:
@@ -447,9 +447,10 @@ class Screen:
     updated_at: datetime | None = None
     buttons: tuple[Button, ...] = ()
 
-    def text(self, lang: str, default_lang: str = "ru") -> TextBlock:
-        """Body in ``lang`` → default language → any language → empty."""
-        block = self.body.get(lang) or self.body.get(default_lang)
+    def text(self, _lang: str | None = None, default_lang: str = "ru") -> TextBlock:
+        """The Russian body → any language → empty. The bot is Russian-only: the first argument (an old
+        language) is ignored, old ``en`` texts stay in the database unused."""
+        block = self.body.get(default_lang)
         if block is None and self.body:
             block = next(iter(self.body.values()))
         return block or TextBlock("")
@@ -459,9 +460,9 @@ class Screen:
         kind = row.get("kind") or "custom"
         mode = row.get("media_mode") or "attach"
         if kind not in SCREEN_KINDS:
-            raise ContentError("kind", f"expected one of {', '.join(SCREEN_KINDS)}")
+            raise ContentError("kind", f"нужно одно из: {', '.join(SCREEN_KINDS)}")
         if mode not in MEDIA_MODES:
-            raise ContentError("media_mode", f"expected one of {', '.join(MEDIA_MODES)}")
+            raise ContentError("media_mode", f"нужно одно из: {', '.join(MEDIA_MODES)}")
         return cls(
             id=int(row["id"]),
             code=row.get("code"),

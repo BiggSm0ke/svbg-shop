@@ -29,6 +29,7 @@ __all__ = [
     "EXTENSION_MODULES",
     "MODULES_SECTION",
     "PAYMENTS_SECTION",
+    "RETIRED_KEYS",
     "SECTIONS",
     "Apply",
     "Registry",
@@ -427,8 +428,9 @@ _PANEL_PREFIX_RE: Final = re.compile(r"[A-Za-z0-9_-]{1,12}")
 #: Placeholders of ``PANEL_DESCRIPTION_TEMPLATE`` (06 §3.2: Bedolaga ``{username}`` → ``@{tg_username}``).
 PANEL_DESCRIPTION_FIELDS: Final = ("full_name", "tg_username", "telegram_id", "public_id")
 _PLACEHOLDER_RE: Final = re.compile(r"\{([^{}]*)\}")
-#: Languages the bot has texts for (``DEFAULT_LANGUAGE`` choices).
-LANGUAGES: Final = ("ru", "en")
+#: Keys the bot no longer has. An old line in ``.env`` is dropped by the mirror (and by ``svbg env render``),
+#: a stored row is ignored; nothing fails at startup. The bot is Russian-only, so the language keys are gone.
+RETIRED_KEYS: Final = frozenset({"DEFAULT_LANGUAGE", "I18N_AVAILABLE", "I18N_ASK_ON_START"})
 
 
 def _panel_prefix(value: Any) -> None:
@@ -445,12 +447,6 @@ def _description_template(value: Any) -> None:
         if name not in PANEL_DESCRIPTION_FIELDS:
             allowed = ", ".join("{" + f + "}" for f in PANEL_DESCRIPTION_FIELDS)
             raise ValueError(f"неизвестная подстановка {{{name}}}; можно: {allowed}")
-
-
-def _languages(value: Any) -> None:
-    for item in value or []:
-        if str(item) not in LANGUAGES:
-            raise ValueError(f"неизвестный язык {item}; доступны: {', '.join(LANGUAGES)}")
 
 
 #: The entry captcha's emojis (``svbg.tg.user.captcha``): one of them is the answer, all are the buttons.
@@ -474,15 +470,6 @@ def _captcha_emojis(value: Any) -> None:
             or not any(ord(ch) >= 0x2000 for ch in item)
         ):
             raise ValueError(f"«{item}» не похоже на эмодзи")
-
-
-def _check_languages(cfg: Mapping[str, Any], changed: frozenset[str]) -> Mapping[str, str]:
-    available = cfg.get("I18N_AVAILABLE") or []
-    default = cfg.get("DEFAULT_LANGUAGE")
-    if available and default and default not in available:
-        keys = changed & {"I18N_AVAILABLE", "DEFAULT_LANGUAGE"} or {"I18N_AVAILABLE"}
-        return dict.fromkeys(keys, f"язык по умолчанию ({default}) должен быть в списке доступных языков")
-    return {}
 
 
 #: User notification switches (06 M10): key, title, description.
@@ -1050,7 +1037,7 @@ def core_registry() -> Registry:
             10,
             "sales",
             "Кнопка подписки синеет за N дней до конца",
-            "Кнопка «📱 Подписка» в меню показывает, сколько осталось. Пока дней больше этого числа, она "
+            "Кнопка «👤 Профиль» в меню показывает, сколько осталось. Пока дней больше этого числа, она "
             "зелёная, меньше — синяя. У пробного периода кнопка всегда красная.",
             min=1,
             max=365,
@@ -1064,7 +1051,7 @@ def core_registry() -> Registry:
             3,
             "sales",
             "Кнопка подписки краснеет за N дней до конца",
-            "Когда до конца оплаченной подписки остаётся меньше этого числа дней, кнопка «📱 Подписка» "
+            "Когда до конца оплаченной подписки остаётся меньше этого числа дней, кнопка «👤 Профиль» "
             "становится красной. Должно быть меньше, чем у синего цвета.",
             min=1,
             max=365,
@@ -1417,8 +1404,8 @@ def core_registry() -> Registry:
             24,
             "promo",
             "Сколько ссылка помнит цель",
-            "Сколько часов бот помнит цель и промокод из ссылки, пока человек проходит подписку на канал, "
-            "выбор языка и согласие с правилами.",
+            "Сколько часов бот помнит цель и промокод из ссылки, пока человек проходит подписку на канал "
+            "и согласие с правилами.",
             min=1,
             max=720,
             advanced=True,
@@ -1496,44 +1483,6 @@ def core_registry() -> Registry:
         )
     )
     # ---- Система
-    add(
-        SettingDef(
-            "DEFAULT_LANGUAGE",
-            "enum",
-            "ru",
-            "system",
-            "Язык по умолчанию",
-            "Язык бота для новых пользователей.",
-            choices=LANGUAGES,
-            tags=("язык", "language"),
-        )
-    )
-    add(
-        SettingDef(
-            "I18N_AVAILABLE",
-            "list[str]",
-            list(LANGUAGES),
-            "system",
-            "Доступные языки",
-            f"Языки, между которыми может выбирать пользователь, через запятую ({', '.join(LANGUAGES)}). "
-            "Пусто — только язык по умолчанию.",
-            validator=_languages,
-            tags=("язык", "language", "i18n"),
-            hint="ru, en",
-        )
-    )
-    add(
-        SettingDef(
-            "I18N_ASK_ON_START",
-            bool,
-            False,
-            "system",
-            "Спрашивать язык при старте",
-            "Новый пользователь сначала выбирает язык из доступных; иначе — язык по умолчанию (сменить можно "
-            "в меню).",
-            tags=("язык", "language", "онбординг"),
-        )
-    )
     add(
         SettingDef(
             "TIMEZONE",
@@ -1662,7 +1611,6 @@ def core_registry() -> Registry:
     )
     _add_payment_instances(reg)
     reg.add_check(_check_webhook_mode)
-    reg.add_check(_check_languages)
     reg.add_check(_check_sub_button_days)
     return reg
 

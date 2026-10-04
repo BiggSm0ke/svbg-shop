@@ -32,7 +32,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ACTION_TEXTS",
-    "ACTION_TEXTS_EN",
     "K_HWID_DELETE",
     "K_HWID_RESET",
     "ActionResult",
@@ -56,14 +55,6 @@ ACTION_TEXTS: Final[Mapping[str, str]] = {
     "frozen": "Подписка приостановлена — действие недоступно.",
     "cooldown": "Слишком часто. Попробуйте через {minutes} мин.",
 }
-#: English of :data:`ACTION_TEXTS` (same keys and placeholders).
-ACTION_TEXTS_EN: Final[Mapping[str, str]] = {
-    "ok": "Done.",
-    "not_found": "Subscription not found.",
-    "pending": "The subscription is still connecting — please try again in a minute.",
-    "frozen": "Your subscription is on hold — the action is not available.",
-    "cooldown": "Too often. Please try again in {minutes} min.",
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,11 +69,9 @@ class ActionResult:
         minutes = max(1, -(-self.retry_after_s // 60))
         return ACTION_TEXTS.get(self.reason, "").format(minutes=minutes)
 
-    def localized(self, lang: str | None) -> str:
-        """:attr:`text` in ``lang`` (Russian fallback)."""
-        if lang != "en" or self.reason not in ACTION_TEXTS_EN:
-            return self.text
-        return ACTION_TEXTS_EN[self.reason].format(minutes=max(1, -(-self.retry_after_s // 60)))
+    def localized(self, _lang: str | None = None) -> str:
+        """:attr:`text` (kept for old callers that pass a language; always Russian)."""
+        return self.text
 
 
 class SubscriptionActions:

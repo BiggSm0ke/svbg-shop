@@ -39,7 +39,6 @@ __all__ = [
     "can_spend",
     "disabled_reason_for",
     "freeze",
-    "localize_spend",
     "spend_check",
     "unfreeze",
     "zero_hold",
@@ -53,22 +52,6 @@ SPEND_TEXTS: Final = {
     "banned": "Доступ ограничен — оплата недоступна. Напишите в поддержку.",
     "no_user": "Пользователь не найден.",
 }
-#: English of :data:`SPEND_TEXTS` (same keys).
-SPEND_TEXTS_EN: Final = {
-    "frozen": "Your subscription is on hold — payment is not available right now. Please contact support.",
-    "banned": "Access is restricted — payment is not available. Please contact support.",
-    "no_user": "User not found.",
-}
-
-
-def localize_spend(text: str | None, lang: str | None) -> str:
-    """A refusal of :data:`SPEND_TEXTS` (as the guards return it) in ``lang``; any other text stays."""
-    value = text or ""
-    if lang == "en":
-        for key, ru in SPEND_TEXTS.items():
-            if value == ru:
-                return SPEND_TEXTS_EN[key]
-    return value
 
 
 Outcome = Literal["active", "expired", "zeroed"]

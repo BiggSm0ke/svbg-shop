@@ -55,7 +55,7 @@ async def test_ip_guard_warns_owner_blocks_by_button_and_unblocks(
         buyer = chat(shop, 5_701)
         await buyer.start()
         await shop.fund(5_701, 17_900)
-        await buyer.press("Подписка", expect="📱 Подписка")
+        await buyer.press("Профиль", expect="👤 Профиль")
         await buyer.press("Купить подписку", expect="Выберите срок")
         await buyer.press("1 мес.", expect="Спишем с баланса")
         await buyer.press("Оплатить 179")

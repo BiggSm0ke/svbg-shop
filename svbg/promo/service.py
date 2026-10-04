@@ -52,7 +52,6 @@ from svbg.promo.legacy import LegacyPromo
 from svbg.promo.rules import (
     KIND_FIELDS,
     REFUSALS,
-    REFUSALS_EN,
     VALUE_KINDS,
     Facts,
     Promo,
@@ -89,6 +88,7 @@ __all__ = [
     "PromoService",
     "PromoStats",
     "TrialGranter",
+    "UsedCode",
 ]
 
 log = logging.getLogger("svbg.promo")
@@ -151,7 +151,16 @@ class PendingEntry:
     code: str
     until: datetime
     label: str  # «−20 % на покупку»
-    label_en: str = ""  # «−20% off your purchase»
+
+
+@dataclass(frozen=True, slots=True)
+class UsedCode:
+    """A promo code the user entered (their «🎟 Промокоды» list)."""
+
+    code: str
+    what: str  # «+7 дней к подписке», «−150 ₽ на покупку»
+    used_at: datetime
+    waiting: bool  # a discount that waits for the purchase (reserved or bound to an unpaid order)
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,15 +219,11 @@ class _Attempts:
         self._recent(user_id).append(time.monotonic())
 
 
-def _money(amount: int, currency: str, lang: str = "ru") -> str:
+def _money(amount: int, currency: str) -> str:
     try:
-        return format_money(amount, currency, lang)
+        return format_money(amount, currency)
     except (ValueError, KeyError):
         return f"{amount} {currency}"
-
-
-def _money_en(amount: int, currency: str) -> str:
-    return _money(amount, currency, "en")
 
 
 class PromoService:
@@ -258,33 +263,18 @@ class PromoService:
     def timezone(self) -> str:
         return self._timezone() or "Europe/Moscow"
 
-    def plan_title(self, plan_id: int, lang: str = "ru") -> str | None:
+    def plan_title(self, plan_id: int, _lang: str | None = None) -> str | None:
         snap = getattr(self.catalog, "snapshot", None)
         plan = snap.plan(plan_id) if snap is not None else None
-        return plan.title(lang) if plan is not None else None
+        return plan.title("ru") if plan is not None else None
 
-    def describe(self, promo: Promo, lang: str = "ru") -> str:
-        if lang == "en":
-            return describe(
-                promo, money=_money_en, plan_title=lambda plan_id: self.plan_title(plan_id, "en"), lang="en"
-            )
+    def describe(self, promo: Promo, _lang: str | None = None) -> str:
         return describe(promo, money=_money, plan_title=self.plan_title)
 
-    def localize(self, act: Activation, lang: str | None) -> str:
-        """The text of an activation result in ``lang`` (Russian — the built one — otherwise)."""
-        if lang != "en":
-            return act.text
-        if act.outcome == "refused":
-            return REFUSALS_EN.get(act.reason or "", act.text)
-        if act.promo is None:
-            return act.text
-        what = self.describe(act.promo, "en")
-        if act.outcome == "pending" and act.until is not None:
-            return (
-                f"✅ Promo code {act.promo.code} accepted: {what}.\n"
-                f"The discount applies at checkout until {_fmt_until(act.until, self.timezone)}."
-            )
-        return f"🎁 Promo code {act.promo.code} applied: {what}."
+    @staticmethod
+    def localize(act: Activation, _lang: str | None = None) -> str:
+        """The text of an activation result (the bot is Russian-only; kept for older callers)."""
+        return act.text
 
     async def load(self) -> int:
         """Fill the pending index (start-up); expired rows are deleted."""
@@ -306,7 +296,7 @@ class PromoService:
         return len(self._pending)
 
     def _entry(self, promo: Promo, until: datetime) -> PendingEntry:
-        return PendingEntry(promo.id, promo.code, until, self.describe(promo), self.describe(promo, "en"))
+        return PendingEntry(promo.id, promo.code, until, self.describe(promo))
 
     def pending(self, user_id: int) -> PendingEntry | None:
         """The user's waiting discount (memory, 0 SQL)."""
@@ -589,7 +579,7 @@ class PromoService:
     # --------------------------------------------------------------------------------------- checkout
 
     async def checkout_discounts(
-        self, user_id: int, plan_id: int | None, lang: str = "ru"
+        self, user_id: int, plan_id: int | None, _lang: str | None = None
     ) -> list[PromoDiscount]:
         """Discounts for a draft of ``plan_id`` (``CheckoutService.draft_plan(discounts=…)``)."""
         entry = self.pending(user_id)
@@ -638,7 +628,7 @@ class PromoService:
                 await self.drop_pending(user_id)
             return []
         found = discount_of(promo, plan_id)
-        return [replace(found, lang=lang)] if found is not None else []
+        return [found] if found is not None else []
 
     async def drop_pending(self, user_id: int) -> None:
         """Forget the user's waiting discount and free its reserved use."""
@@ -648,6 +638,30 @@ class PromoService:
             await conn.execute(sa.delete(promo_pending).where(promo_pending.c.user_id == user_id))
             await self._recount(conn, await self._release(conn, user_id))
 
+    async def history(self, user_id: int, limit: int = 10) -> list[UsedCode]:
+        """The codes the user entered, newest first (one SQL): for «👤 Профиль» → «🎟 Промокоды»."""
+        stmt = (
+            sa.select(promocodes, promo_uses.c.effect, promo_uses.c.used_at, promo_uses.c.order_id)
+            .select_from(promo_uses.join(promocodes, promocodes.c.id == promo_uses.c.promo_id))
+            .where(promo_uses.c.user_id == user_id)
+            .order_by(promo_uses.c.used_at.desc(), promo_uses.c.id.desc())
+            .limit(max(1, limit))
+        )
+        async with self.db.read() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
+        out: list[UsedCode] = []
+        for r in rows:
+            promo = Promo.from_row(r)
+            effect = r["effect"] if isinstance(r["effect"], Mapping) else {}
+            off = effect.get("discount_minor")
+            if isinstance(off, int) and not isinstance(off, bool) and off > 0:
+                what = f"−{_money(off, promo.currency or self.currency)} на покупку"
+            else:
+                what = self.describe(promo)
+            waiting = bool(effect.get("reserved") or effect.get("claimed"))
+            out.append(UsedCode(promo.code, what, r["used_at"], waiting))
+        return out
+
     async def claim(
         self,
         conn: AsyncConnection,
@@ -655,7 +669,7 @@ class PromoService:
         order_id: int,
         user_id: int,
         snapshot: Mapping[str, Any] | None,
-        lang: str = "ru",
+        _lang: str | None = None,
     ) -> str | None:
         """Bind the user's reserved promo uses to ``order_id`` — in ``CheckoutService.pay``'s transaction,
         before the order leaves ``draft`` (the buyer's row is locked there). ``None``: fine (or no promo in
@@ -680,7 +694,7 @@ class PromoService:
                 .returning(promo_uses.c.id)
             )
             if bound is None:
-                return (REFUSALS_EN if lang == "en" else REFUSALS)["claim_gone"]
+                return REFUSALS["claim_gone"]
         return None
 
     async def redeem_order(self, order_id: int) -> int:
@@ -1137,9 +1151,7 @@ class PromoService:
     def _refresh_pending_labels(self, promo: Promo) -> None:
         for uid, entry in list(self._pending.items()):
             if entry.promo_id == promo.id:
-                self._pending[uid] = PendingEntry(
-                    promo.id, promo.code, entry.until, self.describe(promo), self.describe(promo, "en")
-                )
+                self._pending[uid] = PendingEntry(promo.id, promo.code, entry.until, self.describe(promo))
 
     async def delete(self, promo_id: int, actor: Actor) -> None:
         """Only an unused promo can be deleted; a used one is switched off instead (history stays)."""

@@ -3,8 +3,9 @@
 * ``adm`` — the root (``admin`` is the same screen: the old content hub's code, so old buttons and messages
   keep working; ``/admin`` opens it). Three lines of numbers from the cached dashboard (no SQL on an ordinary
   click), quick actions (search, a new broadcast, «Требует внимания», maintenance on, settings waiting for a
-  restart) and the sections: 👥 Пользователи, 📦 Тарифы, 💳 Оплата, 🎯 Маркетинг, 📣 Связь, 🎨 Оформление,
-  📊 Статистика, ⚙️ Система, 🧩 Модули (only when a module is wired).
+  restart) and the sections, the most used first: 👥 Пользователи, 📊 Статистика, 📦 Тарифы, 💳 Оплата,
+  🎯 Маркетинг, 📣 Связь, 🎨 Оформление, ⚙️ Система, 🧩 Модули (only when a module is wired). Hubs show two
+  short buttons per row (:func:`pairs`).
 * ``adm.u``, ``adm.pay``, ``adm.mk``, ``adm.c``, ``adm.l``, ``adm.sys``, ``adm.x``: hubs (:data:`HUBS`);
   ``adm.rw`` — «🔌 Панель Remnawave»; ``adm.s`` — «📊 Статистика» (:mod:`svbg.tg.admin.dashboard`).
 
@@ -64,7 +65,7 @@ if TYPE_CHECKING:
     from svbg.tg.ui.context import UserCtx
     from svbg.tg.ui.router import HandlerResult, ScreenCtx, ScreenRouter
 
-__all__ = ["HUBS", "ROOT_SECTIONS", "AdminMenu", "Entry", "Hub", "setup"]
+__all__ = ["HUBS", "ROOT_SECTIONS", "AdminMenu", "Entry", "Hub", "pairs", "setup"]
 
 log = logging.getLogger("svbg.tg.admin.menu")
 
@@ -138,7 +139,7 @@ HUBS: Final[dict[str, Hub]] = {
     for h in (
         Hub(
             nav.HUB_USERS,
-            "Поиск, новые клиенты, оплаты и блокировки.",
+            "Поиск и списки клиентов. «🚪 Вход в бот»: капча, правила и обязательный канал для новых.",
             (
                 Entry("🔍 Найти", "au.find", role="support", perm="users.view"),
                 Entry("🆕 Новые", "au.new", role="support", perm="users.view"),
@@ -151,57 +152,51 @@ HUBS: Final[dict[str, Hub]] = {
         ),
         Hub(
             nav.HUB_PAY,
-            "Кассы, баланс клиентов и ручные оплаты.",
+            "Кассы, ручные оплаты по чекам и пополнение баланса.",
             (
                 Entry("🏦 Кассы", "apay", role="owner"),
-                _slice("💰 Баланс и пополнение", "pay.wallet"),
                 Entry("🧾 Ждут подтверждения", "apay.rc", perm="payments.confirm"),
-                Entry("💱 Валюта", "set.key", arg="CURRENCY", perm="settings.business"),
+                _slice("💰 Баланс и пополнение", "pay.wallet"),
             ),
         ),
         Hub(
             nav.HUB_MARKETING,
-            "Реклама считает переходы и оплаты по каждой ссылке. Ссылки на разделы просто открывают нужный "
-            "экран бота, например тариф или промокод.",
+            "Промокоды, рекламные ссылки со статистикой, ссылки на разделы бота и рефералка.",
             (
                 Entry("🎟 Промокоды", "prm", perm="promo"),
                 Entry("📢 Реклама", "ads", perm="promo"),
-                Entry("🔗 Ссылки на разделы бота", "dl", perm="deeplinks"),
+                Entry("🔗 Ссылки на разделы", "dl", perm="deeplinks"),
                 _slice("🤝 Рефералка", "m.ref"),
             ),
         ),
         Hub(
             nav.HUB_COMM,
-            "Рассылки, сообщения, которые бот сам пишет клиентам, поддержка и админ-группа.",
+            "Рассылки, поддержка, сообщения, которые бот сам пишет клиентам, и админ-группа.",
             (
                 Entry("📨 Рассылки", "bc", perm="broadcast"),
-                _slice("🔔 Уведомления клиентам", "c.notify"),
                 _slice("💬 Поддержка", "c.support"),
+                _slice("🔔 Уведомления клиентам", "c.notify"),
                 Entry("🛎 Админ-группа", "achat", role="owner"),
             ),
         ),
         Hub(
             nav.HUB_LOOK,
-            "Как выглядит бот: экраны и кнопки, страницы с правилами, языки и картинки.",
+            "Экраны и кнопки бота, страницы с FAQ, правилами и офертой, картинки.",
             (
                 Entry("✏️ Конструктор экранов", "ce.home", perm="content.edit"),
-                Entry(
-                    "✏️ Режим правки: вкл/выкл", "ce.a", action="mode", perm="content.edit", requires="ce.home"
-                ),
-                Entry("📄 Страницы (FAQ, правила, оферта)", "pgs", perm="settings.business"),
-                _slice("🌐 Языки", "l.lang"),
+                Entry("📄 Страницы", "pgs", perm="settings.business"),
                 _slice("🖼 Картинки и баннер", "l.media"),
             ),
         ),
         Hub(
             nav.HUB_SYSTEM,
-            "Состояние бота, панель, бэкапы, команда и все настройки.",
+            "Состояние бота, техработы, команда, панель, бэкапы и все настройки.",
             (
                 Entry("🩺 Состояние", "status", perm="system.view"),
-                Entry("🔌 Панель Remnawave", nav.PANEL, role="owner"),
-                Entry("💾 Бэкапы и обновления", "ops", role="owner"),
                 _slice("🛠 Техработы", "sys.maint"),
                 Entry("👮 Команда", "roles", role="support", perm="roles.manage"),
+                Entry("🔌 Панель Remnawave", nav.PANEL, role="owner"),
+                Entry("💾 Бэкапы и обновления", "ops", role="owner"),
                 _slice("🧭 Основное", "sys.main"),
                 _slice("🧰 Сервер и .env", "sys.server", role="owner"),  # the log level alone is not a reason
                 Entry("🔎 Все настройки", "settings_root", perm="settings.business"),
@@ -219,18 +214,21 @@ HUBS: Final[dict[str, Hub]] = {
     )
 }
 
-#: The sections of the root, two per row, in this order (a hub or a screen opened directly).
+#: The sections of the root, two per row, in this order (a hub or a screen opened directly): the most used
+#: first.
 ROOT_SECTIONS: Final[tuple[Entry, ...]] = (
     Entry("👥 Пользователи", nav.HUB_USERS, role="support"),
+    Entry("📊 Статистика", nav.STATS, perm="stats"),
     Entry("📦 Тарифы", "plans", perm="plans"),
     Entry("💳 Оплата", nav.HUB_PAY),
     Entry("🎯 Маркетинг", nav.HUB_MARKETING),
     Entry("📣 Связь", nav.HUB_COMM),
     Entry("🎨 Оформление", nav.HUB_LOOK),
-    Entry("📊 Статистика", nav.STATS, perm="stats"),
     Entry("⚙️ Система", nav.HUB_SYSTEM),
     Entry("🧩 Модули", nav.HUB_MODULES, role="support"),
 )
+
+pairs = nav.pairs  # kept for importers of the menu
 
 
 @dataclass(frozen=True, slots=True)
@@ -428,15 +426,8 @@ class AdminMenu:
         return screen
 
     def hub_view(self, user: UserCtx, hub: Hub) -> View:
-        title = nav.TITLES.get(hub.code, hub.code)
-        crumb = nav.breadcrumb(hub.code)
-        head, _, _ = crumb.rpartition(" › ")
-        lines = [
-            f"{_esc(head)} › <b>{_esc(title)}</b>" if head else f"<b>{_esc(title)}</b>",
-            "",
-            _esc(hub.intro),
-        ]
-        rows = [[self._button(e)] for e in hub.entries if self.visible(user, e)]
+        lines = [nav.header(hub.code), "", _esc(hub.intro)]
+        rows = pairs([self._button(e) for e in hub.entries if self.visible(user, e)])
         if not rows:
             lines += ["", _T["empty"]]
         if hub.code == nav.HUB_USERS:
@@ -450,10 +441,7 @@ class AdminMenu:
 
     async def _panel_screen(self, ctx: ScreenCtx, _arg: Any) -> View:
         user = ctx.user
-        lines = [
-            f"{_esc(nav.breadcrumb(nav.HUB_SYSTEM))} › <b>{_esc(nav.TITLES[nav.PANEL])} Remnawave</b>",
-            "",
-        ]
+        lines = [nav.header(nav.PANEL), ""]
         comps = self.components
         if comps is not None and "remnawave" in comps:
             report = await comps.health("remnawave", limit_s=1.0)
@@ -468,11 +456,11 @@ class AdminMenu:
             lines.append(_T["rw_off"])
         lines += ["", _T["rw_hint"]]
         entries = (
+            _slice(_T["b_panel_settings"], "sys.panel"),
             Entry(_T["b_wizard"], "setup.wiz", role="owner"),
             Entry(_T["b_panel_features"], "status.panel", perm="system.view"),
-            _slice(_T["b_panel_settings"], "sys.panel"),
         )
-        rows = [[self._button(e)] for e in entries if self.visible(user, e)]
+        rows = pairs([self._button(e) for e in entries if self.visible(user, e)])
         rows.append(nav.back_row(nav.PANEL))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 

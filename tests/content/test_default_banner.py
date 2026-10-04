@@ -79,10 +79,12 @@ def test_asset_ships_in_the_package_and_is_stored_byte_for_byte() -> None:
     assert (prepared.width, prepared.height) == (2000, 1027)
 
 
-def test_mode_attach_when_every_language_fits_a_caption() -> None:
-    short = {"ru": {"text": "я" * CAPTION_LIMIT}, "en": {"text": "ok"}}
-    long = {"ru": {"text": "ok"}, "en": {"text": "😀" * (CAPTION_LIMIT // 2 + 1)}}  # UTF-16: 2 units each
+def test_mode_attach_when_the_russian_text_fits_a_caption() -> None:
+    short = {"ru": {"text": "я" * CAPTION_LIMIT}}
+    long = {"ru": {"text": "😀" * (CAPTION_LIMIT // 2 + 1)}}  # UTF-16: 2 units each
+    old_en = {"ru": {"text": "ok"}, "en": {"text": "😀" * CAPTION_LIMIT}}  # an old English text is not shown
     assert banner_mode(short, preview_ok=False) == "attach"
+    assert banner_mode(old_en, preview_ok=False) == "attach"
     assert banner_mode(long, preview_ok=True) == "preview"
     assert banner_mode(long, preview_ok=False) is None
 

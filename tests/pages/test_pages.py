@@ -71,7 +71,8 @@ async def test_text_versions_and_cas(db: CountingDatabase, pages: PageService) -
     with pytest.raises(PageError, match="не подходит"):
         await pages.save_text("faq", "ru", "abc", [{"type": "bold", "offset": 0, "length": 50}], ACTOR)
     en = await pages.save_text("faq", "en", "Hello", None, ACTOR, expected_version=2)
-    assert en.version == 3 and en.block_for("en").text == "Hello"  # type: ignore[union-attr]
+    # Russian-only bot: an English text may still be stored by an old editor, but nobody sees it
+    assert en.version == 3 and en.block_for("en").text == TEXT  # type: ignore[union-attr]
     assert en.block_for("ru").text == TEXT  # type: ignore[union-attr]
     restored = await pages.restore("faq", 1, ACTOR)
     assert restored.version == 4 and restored.block_for("ru").text.startswith("Здесь будут")  # type: ignore[union-attr]
@@ -188,8 +189,8 @@ async def test_capture_cancel_and_stale_version(
     env: tuple[UiEnv, PageAdminScreens, PageUserScreens], pages: PageService
 ) -> None:
     ui, admin, _ = env
-    await ui.click(ADMIN, encode(SCREEN_WAIT, arg="rules:en"))
-    assert "(EN)" in ui.text
+    await ui.click(ADMIN, encode(SCREEN_WAIT, arg="rules:en"))  # an old button: edits the Russian text
+    assert "(EN)" not in ui.text and "Правила" in ui.text
     assert await admin.handle_message(text_message(ADMIN, "/cancel"))
     assert "Правила" in ui.text and not admin.capturing(formatted(ADMIN))
     await ui.click(ADMIN, encode(SCREEN_WAIT, arg="rules:ru"))
@@ -200,7 +201,6 @@ async def test_capture_cancel_and_stale_version(
     assert "уже изменили" in ui.text
     assert pages.get("rules").block_for("ru").text == "чужая правка"  # type: ignore[union-attr]
     await ui.click(ADMIN, encode(SCREEN_WAIT, arg="nope:ru"))
-    await ui.click(ADMIN, encode(SCREEN_WAIT, arg="faq:de"))
     assert not admin.capturing(formatted(ADMIN))
     # rights taken away while waiting: the message is not captured
     await ui.click(ADMIN, encode(SCREEN_WAIT, arg="faq:ru"))

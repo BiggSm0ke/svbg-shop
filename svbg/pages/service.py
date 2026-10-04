@@ -71,13 +71,13 @@ class Page:
     def system(self) -> bool:
         return self.kind != "custom"
 
-    def title_for(self, lang: str) -> str:
-        return (
-            self.title.get(lang) or self.title.get(DEFAULT_LANG) or next(iter(self.title.values()), self.code)
-        )
+    def title_for(self, _lang: str | None = None) -> str:
+        """The Russian title (else any); the argument, an old language, is ignored."""
+        return self.title.get(DEFAULT_LANG) or next(iter(self.title.values()), self.code)
 
-    def block_for(self, lang: str) -> TextBlock | None:
-        return self.body.get(lang) or self.body.get(DEFAULT_LANG) or next(iter(self.body.values()), None)
+    def block_for(self, _lang: str | None = None) -> TextBlock | None:
+        """The Russian text (else any); old ``en`` texts stay in the database unused."""
+        return self.body.get(DEFAULT_LANG) or next(iter(self.body.values()), None)
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> Page:

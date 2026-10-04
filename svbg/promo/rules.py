@@ -38,7 +38,6 @@ __all__ = [
     "MAX_DAYS",
     "MAX_USES",
     "REFUSALS",
-    "REFUSALS_EN",
     "VALUE_KINDS",
     "Facts",
     "Promo",
@@ -112,38 +111,16 @@ REFUSALS: Final[Mapping[str, str]] = {
     "not_new": "Промокод только для новых покупателей.",
     "banned": "Аккаунт заблокирован.",
     "currency": "Промокод сейчас не работает. Напишите в поддержку.",
-    "no_sub": "Промокод добавляет дни к подписке — сначала оформите её.",
-    "has_paid_sub": "Промокод на пробный период — у вас уже есть оплаченная подписка.",
+    "no_sub": "Промокод добавляет дни к подписке. Сначала оформите её.",
+    "has_paid_sub": "Это промокод на пробный период, а у вас уже есть оплаченная подписка.",
     "trial_used": "Пробный период уже использован.",
-    "plan_conflict": "У вас другая оплаченная подписка — подарок на этот тариф недоступен.",
+    "plan_conflict": "У вас другая оплаченная подписка, подарок на этот тариф недоступен.",
     "plan_missing": "Тариф промокода больше недоступен. Напишите в поддержку.",
     "plan_not_allowed": "Промокод не действует на этот тариф.",
     "too_many": "Слишком много попыток. Попробуйте через несколько минут.",
     "no_trial": "Пробный период сейчас недоступен.",
-    "own": "Этот промокод создали вы — активировать его нельзя.",
-    "claim_gone": "Скидка по промокоду уже использована — оформите покупку заново.",
-}
-#: English of :data:`REFUSALS` (same keys).
-REFUSALS_EN: Final[Mapping[str, str]] = {
-    "not_found": "There is no such promo code. Check the spelling.",
-    "inactive": "This promo code is no longer valid.",
-    "not_started": "This promo code is not active yet.",
-    "expired": "This promo code has expired.",
-    "exhausted": "This promo code has already been used the maximum number of times.",
-    "used": "You have already used this promo code.",
-    "not_new": "This promo code is for new customers only.",
-    "banned": "The account is blocked.",
-    "currency": "This promo code does not work right now. Please contact support.",
-    "no_sub": "This promo code adds days to a subscription — get one first.",
-    "has_paid_sub": "This promo code is for a trial — you already have a paid subscription.",
-    "trial_used": "The trial has already been used.",
-    "plan_conflict": "You have another paid subscription — the gift for this plan is not available.",
-    "plan_missing": "The plan of this promo code is no longer available. Please contact support.",
-    "plan_not_allowed": "This promo code does not apply to this plan.",
-    "too_many": "Too many attempts. Please try again in a few minutes.",
-    "no_trial": "The trial is not available right now.",
-    "own": "You created this promo code — you cannot activate it.",
-    "claim_gone": "The promo code discount has already been used — start the purchase again.",
+    "own": "Этот промокод создали вы, активировать его нельзя.",
+    "claim_gone": "Скидка по промокоду уже использована. Оформите покупку заново.",
 }
 
 
@@ -151,9 +128,7 @@ class PromoError(ValueError):
     """A bad promo definition; ``str(error)`` is a short Russian message for the owner."""
 
 
-def plural_days(n: int, lang: str = "ru") -> str:
-    if lang == "en":
-        return f"{n} day" if n == 1 else f"{n} days"
+def plural_days(n: int, _lang: str | None = None) -> str:
     n10, n100 = n % 10, n % 100
     if n10 == 1 and n100 != 11:
         word = "день"
@@ -404,13 +379,8 @@ class PromoDiscount:
     amount_minor: int | None = None
     min_amount_minor: int | None = None
 
-    lang: str = "ru"
-
     @property
     def label(self) -> str:
-        if self.lang == "en":
-            off = f"−{self.percent}%" if self.percent is not None else "discount"
-            return f"Promo code {self.code} {off}"
         off = f"−{self.percent} %" if self.percent is not None else "скидка"
         return f"Промокод {self.code} {off}"
 
@@ -455,32 +425,12 @@ def describe(
     *,
     money: Callable[[int, str], str],
     plan_title: Callable[[int], str | None] | None = None,
-    lang: str = "ru",
+    _lang: str | None = None,
 ) -> str:
     """One line for users and the owner: «−20 % на покупку», «+7 дней к подписке», «+100 ₽ на баланс»…
-    (``lang="en"``: «−20% off your purchase», «+7 days to your subscription»…)."""
+    (the last argument, an old language code, is ignored: the bot is Russian-only)."""
     cur = promo.currency or ""
     kind = promo.kind
-    if lang == "en":
-        days = plural_days(promo.days or 0, "en")
-        if kind == "days":
-            return f"+{days} to your subscription"
-        if kind == "percent":
-            return f"−{promo.percent}% off your purchase"
-        if kind == "fixed":
-            return f"−{money(promo.amount_minor or 0, cur)} off your purchase"
-        if kind == "wallet":
-            return f"+{money(promo.amount_minor or 0, cur)} to your balance"
-        if kind == "trial_extend":
-            return f"trial +{days}"
-        if kind == "plan_gift":
-            title = (
-                plan_title(promo.plan_id) if plan_title and promo.plan_id else None
-            ) or f"#{promo.plan_id}"
-            return f"«{title}» plan for {days}"
-        if kind == "wallet_days":
-            return f"+{money(promo.amount_minor or 0, cur)} to your balance and +{days}"
-        return kind
     if kind == "days":
         return f"+{plural_days(promo.days or 0)} к подписке"
     if kind == "percent":

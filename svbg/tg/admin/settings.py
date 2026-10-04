@@ -125,13 +125,13 @@ SEARCH_LIMIT: Final = 8
 HISTORY_LIMIT: Final = 10
 MAX_VALUE_CHARS: Final = 300  # longest value shown in a card (lists can be long)
 MAX_LABEL_CHARS: Final = 60
+SLICE_PAGE: Final = 10  # keys per page of a slice
 _RESULT_CACHE: Final = 512
 _GROUP_WARN_COOLDOWN: Final = 60.0  # one "delete your secret" warning per group per minute
 _GROUP_WARN_CACHE: Final = 1024
 
 # Owner-facing texts (Russian), in one place.
 _T: Final[dict[str, str]] = {
-    "root_title": "🔎 <b>Все настройки</b>",
     "root_hint": "Все настройки бота по разделам, как в файле .env. Обычно быстрее открыть нужный раздел "
     "админки или найти настройку поиском. Правки сохраняются в .env, почти все работают сразу.",
     "root_empty": "Доступных вам разделов нет.",
@@ -139,7 +139,6 @@ _T: Final[dict[str, str]] = {
     "problems": "⚠️ Требуют внимания:",
     "search": "🔎 Поиск",
     "menu": "🏠 Меню",
-    "back": "⬅️ Назад",
     "to_settings": "🔎 Все настройки",
     "kassas": "🏦 Кассы",
     "key_line": "Ключ в .env: <code>{key}</code>",
@@ -293,7 +292,10 @@ def can_open_settings(user: UserCtx) -> bool:
 
 
 def can_view(user: UserCtx, defn: SettingDef) -> bool:
-    """Owner: every key. Admin with ``settings.business``: business keys only. Others: nothing."""
+    """Owner: every key. Admin with ``settings.business``: business keys only. Others: nothing. Keys of
+    :data:`slices.HIDDEN` (languages of older versions): nobody."""
+    if defn.key in slices.HIDDEN:
+        return False
     if user.role == "owner":
         return True
     return can_open_settings(user) and is_business(defn)
@@ -508,7 +510,7 @@ class SettingsScreens:
         if isinstance(arg, str):
             arg = arg.removesuffix(TREE_MARK)
         defn = self.registry.find(arg) if isinstance(arg, str) else None
-        if defn is None:
+        if defn is None or defn.key in slices.HIDDEN:
             self._stale(screen=screen)
         if not can_view(ctx.user, defn):
             await self._deny(ctx, f"{place}:{defn.key}", screen=screen)
@@ -625,6 +627,11 @@ class SettingsScreens:
         parent = self.registry.parent(sid)
         return _SECTION_ICON.get(sid) or _SECTION_ICON.get(parent or "", "⚙️")
 
+    def _section_label(self, sid: str, title: str) -> str:
+        """``🚀 Запуск``; a title with its own emoji (``🌐 Трафик LTE``) keeps it instead of the section's."""
+        head = title.split(" ", 1)[0]
+        return title if head and not head[0].isalnum() else f"{self._section_icon(sid)} {title}"
+
     async def _component_icons(self, names: set[str]) -> dict[str, str]:
         components = self.service.components
         present = [n for n in sorted(names) if n in components]
@@ -641,12 +648,7 @@ class SettingsScreens:
         if owner:
             names = {d.component for _, _, defs in sections for d in defs if d.component}
             icons = await self._component_icons({n for n in names if n})
-        lines = [
-            _T["root_title"],
-            _esc(nav.breadcrumb(SCREEN_ROOT)),
-            "",
-            _T["root_hint"] if sections else _T["root_empty"],
-        ]
+        lines = [nav.header(SCREEN_ROOT), "", _T["root_hint"] if sections else _T["root_empty"]]
         if owner:
             if self.service.restart_pending:
                 keys = ", ".join(sorted(self.service.restart_pending))
@@ -656,15 +658,20 @@ class SettingsScreens:
                 for key, problem in sorted(self.service.problems.items())[:5]:
                     lines.append(f"• <code>{_esc(key)}</code>: {_esc(_cut(problem, 200))}")
         rows: list[list[InlineKeyboardButton]] = [[nav_button(_T["search"], ACTIONS, A_SEARCH)]]
+        buttons: list[InlineKeyboardButton] = []
         for sid, title, defs in sections:
-            label = f"{self._section_icon(sid)} {title}"
-            marks = []
-            for comp in dict.fromkeys(d.component for d in defs if d.component):
-                if comp in icons:
-                    marks.append(icons[comp])
+            label = self._section_label(sid, title)
+            # one mark per state (28 cash desks are not 28 icons); a switched-off part needs no mark
+            marks = dict.fromkeys(
+                icons[comp]
+                for comp in dict.fromkeys(d.component for d in defs if d.component)
+                if comp in icons
+            )
+            marks.pop(_HEALTH_ICON.get(Health.DISABLED, "⏸"), None)
             if marks:
                 label += " " + "".join(marks)
-            rows.append([await self._btn(ctx, label, SCREEN_SECTION, codec_mod.ACTION_OPEN, sid)])
+            buttons.append(await self._btn(ctx, label, SCREEN_SECTION, codec_mod.ACTION_OPEN, sid))
+        rows += nav.pairs(buttons)
         rows.append(nav.back_row(SCREEN_ROOT))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
@@ -701,7 +708,7 @@ class SettingsScreens:
         chunk = shown[page * self.page_size : (page + 1) * self.page_size]
         snap = self.service.current()
 
-        lines = [f"{self._section_icon(sid)} <b>{_esc(titles[sid])}</b>", ""]
+        lines = [nav.header(SCREEN_SECTION, self._section_label(sid, titles[sid])), ""]
         if visible:
             lines.append(_T["section_hint"] if regular else _T["only_advanced"])
         lines += self._notes(sid)
@@ -713,7 +720,7 @@ class SettingsScreens:
             subs = []
         if page == 0:
             for sub, sub_title in subs:
-                label = f"{self._section_icon(sub)} {sub_title}"
+                label = self._section_label(sub, sub_title)
                 rows.append([await self._btn(ctx, label, SCREEN_SECTION, codec_mod.ACTION_OPEN, sub)])
         for defn in chunk:
             marks = ""
@@ -768,9 +775,11 @@ class SettingsScreens:
             )
         parent = self.registry.parent(sid)
         if parent is None:
-            rows.append([nav_button(_T["back"], SCREEN_ROOT)])
+            rows.append(nav.back_row(SCREEN_SECTION))
         else:
-            rows.append([await self._btn(ctx, _T["back"], SCREEN_SECTION, codec_mod.ACTION_OPEN, parent)])
+            label = "⬅️ " + nav.short(self._section_label(parent, titles.get(parent, parent)))
+            back = await self._btn(ctx, label, SCREEN_SECTION, codec_mod.ACTION_OPEN, parent)
+            rows.append(nav.with_admin([back]))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     # ------------------------------------------------------------ key card
@@ -792,6 +801,25 @@ class SettingsScreens:
             return nav_button(label, screen)
         return await self._btn(ctx, label, screen, codec_mod.ACTION_OPEN, arg)
 
+    def _card_header(self, defn: SettingDef, *, tree: bool = False) -> str:
+        """``🛠 Админка › 📦 Тарифы › 🎁 Пробный период › <b>Дней пробного периода</b>``: the way to the key's
+        home (its registry section when opened from «Все настройки»)."""
+        title = f"<b>{_esc(defn.title)}</b>"
+        if tree:
+            section = self._section_label(defn.section, self.registry.section_title(defn.section))
+            return f"{_esc(nav.breadcrumb(SCREEN_SECTION, section))} › {title}"
+        home = slices.home_of(defn)
+        found = slices.SLICES.get(home)
+        if found is not None and found.screen is None:
+            crumb = f"{nav.breadcrumb(found.hub)} › {found.title}"
+        elif found is not None:
+            crumb = nav.breadcrumb(found.screen or nav.ROOT)
+        elif home.startswith("pay."):
+            crumb = nav.breadcrumb("apay.c", slices.title_of(home))
+        else:
+            crumb = f"{nav.breadcrumb(nav.HUB_SYSTEM)} › {slices.title_of(home)}"
+        return f"{_esc(crumb)} › {title}"
+
     async def _card(
         self, ctx: ScreenCtx, defn: SettingDef, *, extra: Sequence[str] = (), tree: bool = False
     ) -> View:
@@ -799,7 +827,7 @@ class SettingsScreens:
         snap = self.service.current()
         value = snap[key]
         source = snap.source(key)
-        lines = [f"<b>{_esc(defn.title)}</b>", _esc(labels.description(defn)), ""]
+        lines = [self._card_header(defn, tree=tree), "", _esc(labels.description(defn)), ""]
         if defn.is_secret and value not in (None, ""):
             fp = self.service.crypto.value_fingerprint(str(value))
             lines.append(_T["now_secret"].format(value=_esc(values.display(defn, value)), fp=_esc(fp)))
@@ -852,7 +880,11 @@ class SettingsScreens:
         rows.append([await self._btn(ctx, _T["history"], SCREEN_HISTORY, codec_mod.ACTION_OPEN, key)])
         if tree:
             back = _section_arg(defn.section, 0, defn.advanced)
-            rows.append([await self._btn(ctx, _T["back"], SCREEN_SECTION, codec_mod.ACTION_OPEN, back)])
+            section = self._section_label(defn.section, self.registry.section_title(defn.section))
+            button = await self._btn(
+                ctx, "⬅️ " + nav.short(section), SCREEN_SECTION, codec_mod.ACTION_OPEN, back
+            )
+            rows.append(nav.with_admin([button]))
         else:
             rows.append([await self._home_button(ctx, defn), nav_button(*_ADMIN_HOME)])
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
@@ -912,20 +944,36 @@ class SettingsScreens:
         return {d.key for d in (*shown, *more)}
 
     @staticmethod
-    def _slice_arg(arg: Any) -> tuple[slices.Slice, bool] | None:
+    def _slice_arg(arg: Any) -> tuple[slices.Slice, bool, int] | None:
+        """``<slice>[:m][:p<page>]``: ``m`` shows the rarely needed keys too, ``p`` is a page."""
         if not isinstance(arg, str):
             return None
-        sid, _, flag = arg.partition(":")
+        sid, *flags = arg.split(":")
         sl = slices.slice_of(sid)
-        if sl is None or flag not in ("", "m"):
+        if sl is None or len(flags) > 2:
             return None
-        return sl, flag == "m"
+        expanded, page = False, 0
+        for flag in flags:
+            if flag == "m":
+                expanded = True
+            elif flag.startswith("p") and flag[1:].isdigit() and len(flag) <= 4:
+                page = int(flag[1:])
+            elif flag:
+                return None
+        return sl, expanded, page
 
-    async def _slice_screen(self, ctx: ScreenCtx, arg: Any) -> View:
+    @staticmethod
+    def _slice_page_arg(sl: slices.Slice, expanded: bool, page: int) -> str:
+        return sl.id + (":m" if expanded else "") + (f":p{page}" if page else "")
+
+    async def _slice_screen(self, ctx: ScreenCtx, arg: Any) -> View | Redirect:
         parsed = self._slice_arg(arg)
         if parsed is None:
+            retired = slices.RETIRED.get(str(arg).partition(":")[0]) if isinstance(arg, str) else None
+            if retired is not None and nav.has_screen(self.router, retired):
+                return Redirect(retired)  # an old button of a slice that is gone (🌐 Языки)
             self._stale(screen=True)
-        return await self.slice_view(ctx, parsed[0], expanded=parsed[1])
+        return await self.slice_view(ctx, parsed[0], expanded=parsed[1], page=parsed[2])
 
     async def slice_view(
         self,
@@ -935,8 +983,11 @@ class SettingsScreens:
         expanded: bool = False,
         note: str | None = None,
         undo: str | None = None,
+        page: int = 0,
+        focus: str | None = None,
     ) -> View:
-        """A slice: header, one sentence, the keys the viewer may see, «🧰 Ещё», links, the way back."""
+        """A slice: header, one sentence, the keys the viewer may see (:data:`SLICE_PAGE` per page; ``focus``:
+        the page with this key), «🧰 Ещё», links, the way back."""
         user = ctx.user
         shown, more = self._slice_defs(sl)
         shown = [d for d in shown if can_view(user, d)]
@@ -967,8 +1018,26 @@ class SettingsScreens:
         if undo:
             rows.append([nav_button(_T["undo"], ACTIONS, A_UNDO, undo)])
         snap = self.service.current()
-        for defn in shown + (more if expanded else []):
+        keys = shown + (more if expanded else [])
+        pages = max(1, -(-len(keys) // SLICE_PAGE))
+        if focus is not None:
+            page = next((i // SLICE_PAGE for i, d in enumerate(keys) if d.key == focus), page)
+        page = min(max(page, 0), pages - 1)
+        for defn in keys[page * SLICE_PAGE : (page + 1) * SLICE_PAGE]:
             rows.append([await self._slice_button(ctx, sl, defn, snap[defn.key])])
+        if pages > 1:
+            pager: list[InlineKeyboardButton] = []
+            if page > 0:
+                pager.append(
+                    nav_button(_T["prev"], SCREEN_SLICE, arg=self._slice_page_arg(sl, expanded, page - 1))
+                )
+            label = _T["page"].format(page=page + 1, pages=pages)
+            pager.append(nav_button(label, SCREEN_SLICE, arg=self._slice_page_arg(sl, expanded, page)))
+            if page < pages - 1:
+                pager.append(
+                    nav_button(_T["next"], SCREEN_SLICE, arg=self._slice_page_arg(sl, expanded, page + 1))
+                )
+            rows.append(pager)
         if more:
             if expanded:
                 rows.append([nav_button(_T["slice_less"], SCREEN_SLICE, arg=sl.id)])
@@ -1013,12 +1082,14 @@ class SettingsScreens:
         if result.rejected:
             reason = next(iter(result.rejected.values()))
             note = _esc(_T["slice_failed"].format(reason=_cut(reason, 300)))
-            return await self.slice_view(ctx, sl, expanded=expanded, note=note)
+            return await self.slice_view(ctx, sl, expanded=expanded, note=note, focus=defn.key)
         if defn.key not in result.applied:
-            return await self.slice_view(ctx, sl, expanded=expanded, note=_T["unchanged"])
+            return await self.slice_view(ctx, sl, expanded=expanded, note=_T["unchanged"], focus=defn.key)
         state = _T["state_on"] if self.service.current()[defn.key] else _T["state_off"]
         note = _esc(_T["slice_done"].format(title=defn.title, state=state))
-        view = await self.slice_view(ctx, sl, expanded=expanded, note=note, undo=result.batch_id)
+        view = await self.slice_view(
+            ctx, sl, expanded=expanded, note=note, undo=result.batch_id, focus=defn.key
+        )
         view.toast = state.capitalize()
         return view
 
@@ -1059,7 +1130,9 @@ class SettingsScreens:
             if not entry.applied and entry.error:
                 line += f"\n    {_esc(_cut(entry.error, 160))}"
             lines.append(line)
-        rows = [[await self._btn(ctx, _T["to_key"], SCREEN_KEY, codec_mod.ACTION_OPEN, defn.key)]]
+        rows = [
+            nav.with_admin([await self._btn(ctx, _T["to_key"], SCREEN_KEY, codec_mod.ACTION_OPEN, defn.key)])
+        ]
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     # ------------------------------------------------------------ changes

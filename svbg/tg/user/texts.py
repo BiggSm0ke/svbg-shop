@@ -1,8 +1,7 @@
 """Short strings the user path builds in code: button labels with amounts, status lines, toasts, errors.
 
 Screen bodies are content (:mod:`svbg.tg.user.seeds`); these are the pieces that carry live values (a price
-on a button, «осталось 3 дн.»). Russian is the source, English the second language; an unknown key or
-language falls back to Russian.
+on a button, «осталось 3 дн.»). The bot speaks Russian only.
 """
 
 from __future__ import annotations
@@ -71,8 +70,6 @@ _RU: Final[Mapping[str, str]] = {
     "btn_not_me": "🗑 Это не я — удалить",
     "btn_plan": "{plan} — от {price}",
     "btn_preset": "{amount}",
-    "btn_lang_ru": "🇷🇺 Русский",
-    "btn_lang_en": "🇬🇧 English",
     # checkout
     "period_days": "{n} дн.",
     "period_months": "{n} мес.",
@@ -123,7 +120,6 @@ _RU: Final[Mapping[str, str]] = {
     "amount_min": "Минимум {min}: именно столько не хватает на покупку.",
     "amount_bad": "Нужно число, например 300",
     "amount_range": "Сумма от {min} до {max}",
-    "lang_set": "Язык изменён",
     "trial_unavailable": "Пробный период недоступен",
     "not_member_yet": "Подписка на канал пока не видна. Подпишитесь и нажмите ещё раз.",
     "channel_check_failed": "Не получилось проверить подписку. Попробуйте через минуту.",
@@ -158,166 +154,49 @@ _RU: Final[Mapping[str, str]] = {
     "sub_servers": "\nСерверы: {list}",
     "sub_servers_more": "{list} и ещё {n}",
     "sub_trial_line": "\n\n🎁 Можно попробовать бесплатно: {days} дн.",
+    # «👤 Профиль»
+    "profile_sub": (
+        "Тариф: {plan}\nСтатус: {status}\nОсталось: {left}\nДействует до: {until}\n"
+        "Устройства: {devices}\nТрафик: {traffic}{servers}"
+    ),
+    "profile_no_sub": "Подписки пока нет. Нажмите «Купить подписку», чтобы выбрать тариф и срок.",
+    "profile_no_name": "без имени",
 }
 
-_EN: Final[Mapping[str, str]] = {
-    "status_none": "No subscription yet.",
-    "status_trial": "🎁 Trial until {until} ({left} left).",
-    "status_active": "✅ «{plan}» is active until {until} ({left} left).",
-    "status_expired": "⌛ Your subscription ended on {until}.",
-    "status_frozen": "⏸ Your subscription is on hold. Please contact support.",
-    "status_pending": "⏳ Setting up your subscription. This takes a few seconds.",
-    "status_missing": "⚠️ Your subscription is temporarily unavailable. We are on it.",
-    "friend": "friend",
-    "btn_menu": "🏠 Menu",
-    "btn_back": "◀️ Back",
-    "btn_support": "💬 Support",
-    "btn_period_save": "{period} — {price} · {monthly}/mo, −{save}%",
-    "btn_pay": "💳 Pay {price}",
-    "btn_other_amount": "✏️ Other amount",
-    "btn_pay_url": "💳 Pay {amount}",
-    "btn_pay_stars": "⭐ Pay {amount}",
-    "btn_i_paid": "🔄 I have paid",
-    "btn_other_method": "↩️ Another method",
-    "btn_cancel_order": "✖️ Cancel purchase",
-    "btn_connect": "🔗 Connect",
-    "btn_open_page": "📲 Open the connection page",
-    "btn_copy": "📋 Copy the link",
-    "btn_qr": "🔳 QR code",
-    "btn_refresh": "🔄 Refresh",
-    "btn_reset_devices": "🧹 Unlink all",
-    "btn_confirm_reset": "🧹 Yes, unlink all",
-    "btn_confirm_reissue": "♻️ Yes, issue a new link",
-    "btn_join": "📣 Open the channel",
-    "btn_joined": "✅ I have joined",
-    "btn_renew": "🔄 Renew",
-    "btn_buy": "🛒 Buy",
-    "btn_devices": "📱 Devices",
-    "btn_not_me": "🗑 Not me — remove",
-    "btn_plan": "{plan} — from {price}",
-    "btn_period": "{period} — {price}",
-    "btn_topup_method": "{icon} {method} — {amount}",
-    "btn_delete_device": "🗑 {n}",
-    "btn_preset": "{amount}",
-    "btn_lang_ru": "🇷🇺 Русский",
-    "btn_lang_en": "🇬🇧 English",
-    "period_days": "{n} days",
-    "period_months": "{n} mo.",
-    "period_year": "1 year",
-    "pay_line_enough": "{price} will be taken from your balance, {left} will be left.",
-    "pay_line_short": "You are {missing} short. Pay the difference and the purchase goes through on its own.",
-    "pay_line_methods": (
-        "You are {missing} short. Choose how to pay the difference: the purchase goes through once you pay."
-    ),
-    "pay_line_free": "Nothing to pay.",
-    "until_approx": "≈ {date}",
-    "surplus": "\n\nIf the method has a higher minimum, the extra stays on your balance.",
-    "surplus_exact": "\n\n{method}: minimum {amount}, so {surplus} will stay on your balance.",
-    "after_purchase": "Once the payment goes through, you get the subscription and this message updates.",
-    "after_topup": "The money is added to your balance as soon as you pay.",
-    "connect_ready": "Valid until {until}.",
-    "connect_pending": "⏳ Setting up your subscription. Tap «Refresh» in a few seconds.",
-    "connect_none": "You have no subscription yet.",
-    "connect_frozen": "⏸ Your subscription is on hold, so you cannot connect right now.",
-    "qr_caption": "🔳 Scan the QR code with the VPN app to add the subscription.",
-    "devices_empty": "No devices yet. Connect and they will show up here.",
-    "devices_loading": "⏳ Loading…",
-    "devices_fresh": "The list has just been updated",
-    "devices_unavailable": (
-        "⚠️ Could not load the list: the panel is not responding. Tap «Refresh» a bit later."
-    ),
-    "devices_note_delete": "\n\nTap 🗑 with a number to unlink a device.",
-    "devices_unlimited": "unlimited",
-    "device_line": "{n}. {name}",
-    "device_unknown": "Device",
-    "device_deleting": "Unlinking the device…",
-    "devices_resetting": "Unlinking devices…",
-    "devices_gone": "This device is no longer in the list",
-    "creating_invoice": "⏳ Creating the invoice…",
-    "checking": "⏳ Checking the payment…",
-    "not_paid_yet": "No payment yet. If you have paid, give it a minute.",
-    "paid_already": "✅ Payment received",
-    "no_methods": "Payment methods are unavailable right now. Please contact support.",
-    "no_plans": "Plans are coming soon.",
-    "plan_gone": "This plan is no longer on sale",
-    "order_gone": "The order is outdated. Choose a plan again.",
-    "order_canceled": "Purchase canceled. Your balance is untouched.",
-    "error_generic": "Something went wrong. Please try again.",
-    "amount_prompt": "How much to top up? Send the amount, e.g. 300.",
-    "amount_min": "The minimum is {min}: that is how much you are short.",
-    "amount_bad": "Send a number, e.g. 300",
-    "amount_range": "The amount must be from {min} to {max}",
-    "lang_set": "Language changed",
-    "trial_unavailable": "The trial is unavailable",
-    "not_member_yet": "You have not joined the channel yet. Join it and tap again.",
-    "channel_check_failed": "Could not check whether you joined. Try again in a minute.",
-    "captcha_wrong": "Wrong one, try again",
-    "captcha_cooldown": "Too many misses in a row. Wait a minute and try again",
-    "captcha_wait": "Please wait {seconds} more sec.",
-    "captcha_done": "You have already passed the check",
-    "no_subscription": "Get a subscription first",
-    "receipt_saved": "📎 Got the receipt. We will check the transfer and credit the money shortly.",
-    "receipt_no_payment": "No open transfer found. Create an invoice in «💰 Balance».",
-    "receipt_already": "This transfer has already been checked.",
-    "unlimited": "unlimited",
-    "left_days": "{n} d",
-    "left_hours": "{n} h",
-    "left_minutes": "{n} min",
-    "left_days_hours": "{d} d {h} h",
-    "size_gb": "{n} GB",
-    "size_mb": "{n} MB",
-    "sub_btn_expired": "expired",
-    "sub_btn_paused": "paused",
-    "sub_state_active": "🟢 active",
-    "sub_state_trial": "🎁 trial",
-    "sub_state_expired": "🔴 expired",
-    "sub_state_frozen": "⏸ on hold",
-    "sub_state_pending": "⏳ setting up",
-    "sub_state_missing": "⚠️ temporarily unavailable",
-    "sub_used_of": "{used} of {limit}",
-    "sub_no_limit": "{used}, no limit",
-    "sub_devices_upto": "up to {limit}",
-    "sub_servers": "\nServers: {list}",
-    "sub_servers_more": "{list} and {n} more",
-    "sub_trial_line": "\n\n🎁 You can try it free for {days} days.",
-}
+#: The one table, under its language code (older helpers and tests read ``_TEXTS["ru"]``).
+_TEXTS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType({"ru": MappingProxyType(dict(_RU))})
 
-_TEXTS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
-    {"ru": MappingProxyType(dict(_RU)), "en": MappingProxyType(dict(_EN))}
-)
-
-#: Payment method kinds as the user sees them (provider names stay hidden, 04 §8): (icon, ru, en).
-METHOD_ICONS: Final[Mapping[str, tuple[str, str, str]]] = MappingProxyType(
+#: Payment method kinds as the user sees them (provider names stay hidden, 04 §8): (icon, name).
+METHOD_ICONS: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
     {
-        "sbp": ("📱", "СБП", "SBP"),
-        "card": ("💳", "Карта", "Card"),
-        "intl_card": ("🌍", "Зарубежная карта", "Foreign card"),
-        "crypto": ("🪙", "Крипта", "Crypto"),
-        "stars": ("⭐", "Stars", "Stars"),
-        "wallet": ("👛", "Кошелёк", "Wallet"),
-        "manual": ("🏦", "Перевод", "Transfer"),
+        "sbp": ("📱", "СБП"),
+        "card": ("💳", "Карта"),
+        "intl_card": ("🌍", "Зарубежная карта"),
+        "crypto": ("🪙", "Крипта"),
+        "stars": ("⭐", "Stars"),
+        "wallet": ("👛", "Кошелёк"),
+        "manual": ("🏦", "Перевод"),
     }
 )
 
 
-def t(lang: str | None, key: str, **values: Any) -> str:
-    """String ``key`` in ``lang`` (Russian fallback) with ``{name}`` values substituted (no format specs)."""
-    table = _TEXTS.get(lang or "ru") or _TEXTS["ru"]
-    text = table.get(key) or _RU[key]
+def t(_lang: str | None, key: str, **values: Any) -> str:
+    """String ``key`` with ``{name}`` values substituted (no format specs). The bot speaks Russian only: the
+    first argument (an old language code) is ignored."""
+    text = _RU[key]
     for name, value in values.items():
         text = text.replace("{" + name + "}", str(value))
     return text
 
 
-def method_label(kind: str | None, lang: str) -> tuple[str, str]:
+def method_label(kind: str | None, _lang: str | None = None) -> tuple[str, str]:
     """``(icon, name)`` of a method kind; unknown kinds are shown as «Оплата»."""
-    icon, ru, en = METHOD_ICONS.get(kind or "", ("💳", "Оплата", "Payment"))
-    return icon, en if lang == "en" else ru
+    return METHOD_ICONS.get(kind or "", ("💳", "Оплата"))
 
 
-def money(amount_minor: int, currency: str, lang: str = "ru") -> str:
+def money(amount_minor: int, currency: str, _lang: str | None = None) -> str:
     try:
-        return format_money(int(amount_minor), currency, lang, nbsp=True)
+        return format_money(int(amount_minor), currency, nbsp=True)
     except (ValueError, KeyError, TypeError):
         return f"{amount_minor} {currency}"
 
@@ -373,7 +252,7 @@ def fmt_bytes(value: int | None, lang: str = "ru") -> str:
     n = max(0, int(value or 0))
     if n >= 1024**3:
         gb = f"{n / 1024**3:.1f}".rstrip("0").rstrip(".")
-        return t(lang, "size_gb", n=gb.replace(".", ",") if lang == "ru" else gb)
+        return t(lang, "size_gb", n=gb.replace(".", ","))
     return t(lang, "size_mb", n=round(n / 1024**2))
 
 

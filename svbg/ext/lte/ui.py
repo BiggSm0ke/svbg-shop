@@ -39,7 +39,6 @@ if TYPE_CHECKING:
 __all__ = [
     "ACTION_TOPUP",
     "SCREEN_TOPUP",
-    "T_EN",
     "T",
     "UiModel",
     "install",
@@ -83,40 +82,6 @@ T: Final[Mapping[str, str]] = {
     "unavailable": "Докупка сейчас недоступна.",
     "gone": "Предложение устарело. Откройте докупку заново.",
 }
-#: English of :data:`T` (same keys and placeholders).
-T_EN: Final[Mapping[str, str]] = {
-    "status_line": "🌐 {group}: {used} / {limit} GB",
-    "block_title": "🌐 <b>{group} traffic</b>",
-    "line": "└ {warn}{used} of {limit} GB · resets {reset}{credits}",
-    "line_credits": " (+{gb} GB added)",
-    "line_blocked": "└ 🚫 limit reached · access returns {when}",
-    "line_blocked_renew": "after renewal",
-    "line_trial_zero": "└ 🔒 not available on the trial",
-    "line_zero": "└ 🔒 not available on your plan",
-    "line_unlimited": "└ ♾ unlimited · used {used} GB",
-    "btn_topup": "⚡ Buy more LTE traffic",
-    "topup_title": "⚡ <b>{group} traffic</b>\nNow: {used} of {limit} GB · resets {reset}.",
-    "topup_blocked": "{group} servers are closed: you are {over} GB over the limit.",
-    "topup_pick": "Choose a pack. It is valid until the reset on {reset} (00:00 MSK).",
-    "pack": "+{gb} GB — {price}",
-    "pack_enough": "✅ +{gb} GB — {price} · enough",
-    "confirm": "⚡ <b>Pack +{gb} GB for {price}</b>\nExpires {reset} at 00:00 MSK. Paid from your balance.",
-    "insufficient": "⚠️ This pack is not enough: you are {over} GB over the limit, so access stays closed.",
-    "btn_confirm": "✅ Confirm",
-    "btn_anyway": "Buy anyway",
-    "btn_back": "◀️ Back",
-    "btn_renew": "🔄 Renew",
-    "btn_support": "💬 Support",
-    "btn_menu": "🏠 Menu",
-    "unavailable": "Buying more traffic is not available right now.",
-    "gone": "The offer is outdated. Open the top-up again.",
-}
-
-
-def _tx(lang: str | None) -> Mapping[str, str]:
-    return T_EN if lang == "en" else T
-
-
 # ------------------------------------------------------------------------------------------- read model
 
 
@@ -180,35 +145,29 @@ def _percent(facts: PackFacts) -> int | None:
 def render_status_line(call: SlotCall) -> SlotResult | None:
     """``home.status_lines``: numbers only (also while blocked)."""
     cfg = _cfg(call)
-    lang = _lang(call)
-    tx = _tx(lang)
+    tx = T
     lines = []
     for f in _shown(call.model, cfg):
         if f.exempt or f.limit.unlimited or f.limit.zero:
             continue
         lines.append(
             tx["status_line"].format(
-                group=group_name(f.group_name, lang),
-                used=fmt_gb(f.used_bytes, cfg.gb_bytes, lang),
-                limit=fmt_gb(f.limit.shown, cfg.gb_bytes, lang),
+                group=group_name(f.group_name),
+                used=fmt_gb(f.used_bytes, cfg.gb_bytes),
+                limit=fmt_gb(f.limit.shown, cfg.gb_bytes),
             )
         )
     return SlotResult(lines=tuple(lines)) if lines else None
 
 
-def _lang(call: SlotCall) -> str:
-    lang = getattr(call.user, "lang", "ru")
-    return lang if isinstance(lang, str) else "ru"
-
-
-def block_lines(f: PackFacts, cfg: LteConfig, lang: str = "ru") -> list[str]:
+def block_lines(f: PackFacts, cfg: LteConfig, _lang: str | None = None) -> list[str]:
     """The «Моя подписка» block of one group."""
     gb = cfg.gb_bytes
-    tx = _tx(lang)
-    title = tx["block_title"].format(group=group_name(f.group_name, lang))
+    tx = T
+    title = tx["block_title"].format(group=group_name(f.group_name))
     deferred = f.period_state == "deferred"
     if f.exempt or f.limit.unlimited:
-        return [title, tx["line_unlimited"].format(used=fmt_gb(f.used_bytes, gb, lang))]
+        return [title, tx["line_unlimited"].format(used=fmt_gb(f.used_bytes, gb))]
     if f.limit.zero:
         return [title, tx["line_trial_zero"] if f.period_is_trial else tx["line_zero"]]
     if f.blocked:
@@ -216,14 +175,14 @@ def block_lines(f: PackFacts, cfg: LteConfig, lang: str = "ru") -> list[str]:
         return [title, tx["line_blocked"].format(when=when)]
     percent = _percent(f)
     warn = "⚠️ " if percent is not None and percent >= cfg.warn_percent else ""
-    credits = tx["line_credits"].format(gb=fmt_gb(f.credit_bytes, gb, lang)) if f.credit_bytes > 0 else ""
+    credits = tx["line_credits"].format(gb=fmt_gb(f.credit_bytes, gb)) if f.credit_bytes > 0 else ""
     reset = tx["line_blocked_renew"] if deferred else fmt_date(f.planned_end_at)
     return [
         title,
         tx["line"].format(
             warn=warn,
-            used=fmt_gb(f.used_bytes, gb, lang),
-            limit=fmt_gb(f.limit.shown, gb, lang),
+            used=fmt_gb(f.used_bytes, gb),
+            limit=fmt_gb(f.limit.shown, gb),
             reset=reset,
             credits=credits,
         ),
@@ -235,7 +194,7 @@ def render_blocks(call: SlotCall) -> SlotResult | None:
     cfg = _cfg(call)
     lines: list[str] = []
     for f in _shown(call.model, cfg):
-        lines.extend(block_lines(f, cfg, _lang(call)))
+        lines.extend(block_lines(f, cfg))
     return SlotResult(lines=tuple(lines)) if lines else None
 
 
@@ -254,9 +213,7 @@ def render_buttons(call: SlotCall) -> SlotResult | None:
     at = model.at if isinstance(model, UiModel) and model.at is not None else now()
     for f in _shown(model, cfg):
         if wants_button(f, cfg, at):
-            button = SlotButton(
-                _tx(_lang(call))["btn_topup"], action=ACTION_TOPUP, style="success", after="connect"
-            )
+            button = SlotButton(T["btn_topup"], action=ACTION_TOPUP, style="success", after="connect")
             return SlotResult(buttons=(button,))
     return None
 
@@ -281,15 +238,10 @@ def _pick_facts(found: Sequence[PackFacts], group_id: int | None) -> PackFacts |
     return found[0] if found and group_id is None else None
 
 
-def _money(amount_minor: int, currency: str, lang: str | None = "ru") -> str:
+def _money(amount_minor: int, currency: str) -> str:
     from svbg.core.money import format_money
 
-    return format_money(amount_minor, currency, lang or "ru", nbsp=True)
-
-
-def _ctx_lang(ctx: Any) -> str:
-    lang = getattr(ctx, "lang", "ru")
-    return lang if lang in ("ru", "en") else "ru"
+    return format_money(amount_minor, currency, nbsp=True)
 
 
 def install(router: Any, service: Callable[[], LteService]) -> None:
@@ -297,12 +249,12 @@ def install(router: Any, service: Callable[[], LteService]) -> None:
     from svbg.tg.ui.renderer import MODULE_SCREEN, nav_button
     from svbg.tg.ui.view import Redirect, View
 
-    def menu_row(lang: str) -> list[Any]:
-        return [nav_button(_tx(lang)["btn_menu"], "home")]
+    def menu_row() -> list[Any]:
+        return [nav_button(T["btn_menu"], "home")]
 
-    def refusal_view(result: packs.Availability, cfg: LteConfig, lang: str) -> Any:
-        tx = _tx(lang)
-        text = result.localized(lang) or tx["unavailable"]
+    def refusal_view(result: packs.Availability, cfg: LteConfig) -> Any:
+        tx = T
+        text = result.text or tx["unavailable"]
         rows: list[list[Any]] = []
         if result.code == "expiring":
             rows.append([nav_button(tx["btn_renew"], "buy", style="primary")])
@@ -310,7 +262,7 @@ def install(router: Any, service: Callable[[], LteService]) -> None:
             from aiogram.types import InlineKeyboardButton
 
             rows.append([InlineKeyboardButton(text=tx["btn_support"], url=cfg.support_url)])
-        rows.append(menu_row(lang))
+        rows.append(menu_row())
         return View(text=text, parse_mode="HTML", keyboard=rows)
 
     async def facts_for(ctx: Any, group_id: int | None) -> PackFacts | None:
@@ -326,35 +278,34 @@ def install(router: Any, service: Callable[[], LteService]) -> None:
             return Redirect("home")
         svc = service()
         cfg = svc.cfg()
-        lang = _ctx_lang(ctx)
-        tx = _tx(lang)
+        tx = T
         f = await facts_for(ctx, ids[0] if ids else None)
         at = now()
         if f is None:
-            return refusal_view(packs.Availability.refuse("no_subscription"), cfg, lang)
+            return refusal_view(packs.Availability.refuse("no_subscription"), cfg)
         result = packs.availability(f, cfg, at=at)
         if not result.ok:
-            return refusal_view(result, cfg, lang)
+            return refusal_view(result, cfg)
         gb = cfg.gb_bytes
-        name = group_name(f.group_name, lang)
+        name = group_name(f.group_name)
         lines = [
             tx["topup_title"].format(
                 group=name,
-                used=fmt_gb(f.used_bytes, gb, lang),
-                limit=fmt_gb(f.limit.shown, gb, lang),
+                used=fmt_gb(f.used_bytes, gb),
+                limit=fmt_gb(f.limit.shown, gb),
                 reset=fmt_date(f.planned_end_at),
             )
         ]
         if f.blocked:
-            lines.append(tx["topup_blocked"].format(group=name, over=fmt_gb(f.overage(), gb, lang)))
+            lines.append(tx["topup_blocked"].format(group=name, over=fmt_gb(f.overage(), gb)))
         lines.append(tx["topup_pick"].format(reset=fmt_date(f.planned_end_at)))
         rows: list[list[Any]] = []
         for pack, enough in packs.order_packs(f, gb):
             label = (tx["pack_enough"] if enough else tx["pack"]).format(
-                gb=pack.gb, price=_money(pack.amount_minor, pack.currency, lang)
+                gb=pack.gb, price=_money(pack.amount_minor, pack.currency)
             )
             rows.append([nav_button(label, SCREEN_TOPUP, "pick", f"{f.group_id}:{pack.id}")])
-        rows.append(menu_row(lang))
+        rows.append(menu_row())
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     @router.action(SCREEN_TOPUP, "pick")
@@ -365,23 +316,22 @@ def install(router: Any, service: Callable[[], LteService]) -> None:
         group_id, pack_id = ids
         svc = service()
         cfg = svc.cfg()
-        lang = _ctx_lang(ctx)
-        tx = _tx(lang)
+        tx = T
         f = await facts_for(ctx, group_id)
         pack = next((p for p in f.packs if p.id == pack_id), None) if f is not None else None
         if f is None or pack is None:
             return Redirect(SCREEN_TOPUP, toast=tx["gone"])
         result = packs.availability(f, cfg, at=now(), pack=pack)
         if not result.ok:
-            return refusal_view(result, cfg, lang)
+            return refusal_view(result, cfg)
         text = tx["confirm"].format(
             gb=pack.gb,
-            price=_money(pack.amount_minor, pack.currency, lang),
+            price=_money(pack.amount_minor, pack.currency),
             reset=fmt_date(f.planned_end_at),
         )
         rows: list[list[Any]] = []
         if result.insufficient:
-            text += "\n\n" + tx["insufficient"].format(over=fmt_gb(f.overage(), cfg.gb_bytes, lang))
+            text += "\n\n" + tx["insufficient"].format(over=fmt_gb(f.overage(), cfg.gb_bytes))
             rows.append([nav_button(tx["btn_anyway"], SCREEN_TOPUP, "buy", f"{group_id}:{pack_id}:1")])
         else:
             rows.append(
@@ -402,12 +352,11 @@ def install(router: Any, service: Callable[[], LteService]) -> None:
         group_id, pack_id, force = ids
         svc = service()
         res = await packs.create_order(svc, ctx.user.user_id, group_id, pack_id, force=force == 1)
-        lang = _ctx_lang(ctx)
         if res.order_id is None:
             refusal = res.refusal or packs.Availability.refuse("no_period")
             if refusal.ok and refusal.insufficient:  # the overage grew meanwhile: ask again
-                return Redirect(SCREEN_TOPUP, toast=_tx(lang)["gone"])
-            return refusal_view(refusal, svc.cfg(), lang)
+                return Redirect(SCREEN_TOPUP, toast=T["gone"])
+            return refusal_view(refusal, svc.cfg())
         return Redirect("co", str(res.order_id))
 
     @router.action(MODULE_SCREEN, ACTION_TOPUP)

@@ -56,7 +56,6 @@ __all__ = [
     "ITEM_TYPE",
     "ORDER_KIND",
     "REFUSALS",
-    "REFUSALS_EN",
     "AddonLteKind",
     "Availability",
     "LtePackItem",
@@ -98,25 +97,6 @@ REFUSALS: Final[Mapping[str, str | None]] = {
     "manual_block": "Доступ ограничен администратором — напишите в поддержку.",
     "frozen": "Подписка заморожена — докупка недоступна.",
     "package_disabled": "Этот пакет больше не продаётся.",
-}
-#: English of :data:`REFUSALS` (same codes and placeholders).
-REFUSALS_EN: Final[Mapping[str, str | None]] = {
-    "exempt": "You have no traffic limit on LTE servers.",
-    "feature_off": None,
-    "no_packages": None,
-    "not_enforced": "The limit is not in effect right now — no need to buy more.",
-    "no_subscription": "Buying more traffic is available for a paid subscription.",
-    "trial": "Buying more traffic is not available on the trial.",
-    "group_unavailable": "LTE servers are not available on your plan.",
-    "no_group_rights": "LTE servers are not available on your plan.",
-    "unlimited": "LTE servers are not available on your plan.",
-    "zero_limit": "LTE servers are not available on your plan.",
-    "no_period": None,
-    "expiring": "Your subscription ends on {date} — renew it first.",
-    "period_changed": "The offer is outdated — open the top-up again.",
-    "manual_block": "Access is restricted by an administrator — please contact support.",
-    "frozen": "Your subscription is on hold — buying more traffic is not available.",
-    "package_disabled": "This pack is no longer on sale.",
 }
 
 
@@ -170,22 +150,15 @@ class Availability:
     code: str = "ok"
     text: str | None = None
     insufficient: bool = False  # ok, but the pack does not return access (warning + «Всё равно купить»)
-    text_en: str | None = field(default=None, compare=False)
 
     @classmethod
     def refuse(cls, code: str, **fmt: str) -> Availability:
         text = REFUSALS.get(code)
-        text_en = REFUSALS_EN.get(code)
-        return cls(
-            False,
-            code,
-            text.format(**fmt) if text else None,
-            text_en=text_en.format(**fmt) if text_en else None,
-        )
+        return cls(False, code, text.format(**fmt) if text else None)
 
-    def localized(self, lang: str | None) -> str | None:
-        """The refusal text in ``lang`` (Russian fallback)."""
-        return (self.text_en or self.text) if lang == "en" else self.text
+    def localized(self, _lang: str | None = None) -> str | None:
+        """The refusal text (kept for old callers that pass a language; always Russian)."""
+        return self.text
 
 
 def _pilot_ok(cfg: LteConfig, facts: PackFacts) -> bool:

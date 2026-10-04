@@ -93,15 +93,14 @@ _ID_RE: Final = re.compile(r"^\d{1,12}$")
 _DSL_MAX: Final = 4000
 
 _T: Final[dict[str, str]] = {
-    "list_title": "📣 <b>Рассылки</b>",
     "list_hint": (
-        "Нажмите «Новая рассылка» и пришлите или перешлите готовое сообщение — форматирование, "
+        "Нажмите «➕ Новая рассылка» и пришлите или перешлите готовое сообщение. Форматирование, "
         "премиум-эмодзи, спойлеры и медиа сохранятся. Перед отправкой будет тест себе и число получателей."
     ),
     "list_empty": "Рассылок пока не было.",
     "new": "➕ Новая рассылка",
-    "to_list": "⬅️ К рассылкам",
-    "to_card": "⬅️ К рассылке",
+    "to_list": "⬅️ Рассылки",
+    "to_card": "⬅️ Рассылка",
     "cancel": "✖️ Отмена",
     "compose": (
         "📣 <b>Новая рассылка</b>\n\nПришлите или перешлите сюда готовое сообщение: текст, фото, GIF, видео, "
@@ -121,7 +120,7 @@ _T: Final[dict[str, str]] = {
     "dsl": (
         "✍️ <b>Своё условие для рассылки #{id}</b>\n\nПришлите JSON условия, как у кнопок конструктора. "
         'Например:\n<code>{{"all": [{{"sub": "active"}}, {{"days_left": {{"lte": 3}}}}]}}</code>\n\n'
-        "Доступно: sub, days_left, balance_minor, has_paid, plan, lang, role, channel_member."
+        "Доступно: sub, days_left, balance_minor, has_paid, plan, role, channel_member."
     ),
     "error": "⚠️ {error}\n\nПопробуйте ещё раз или нажмите «Отмена».",
     "not_found": "Рассылка не найдена",
@@ -322,7 +321,7 @@ class BroadcastScreens:
 
     async def _list_screen(self, ctx: ScreenCtx, _arg: Any) -> View:
         items = await self.repo.recent(RECENT)
-        lines = [_T["list_title"], "", _T["list_hint"]]
+        lines = [nav.header(SCREEN_LIST), "", _T["list_hint"]]
         if not items:
             lines += ["", _T["list_empty"]]
         rows: list[list[InlineKeyboardButton]] = [[nav_button(_T["new"], ACTIONS, "new", style="primary")]]
@@ -404,7 +403,7 @@ class BroadcastScreens:
             rows.append(
                 [nav_button(_T["test"], ACTIONS, "test", arg), nav_button(_T["clone"], ACTIONS, "clone", arg)]
             )
-        rows.append([nav_button(_T["to_list"], SCREEN_LIST)])
+        rows.append(nav.with_admin([nav_button(_T["to_list"], SCREEN_LIST)]))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     async def _segment_screen(self, ctx: ScreenCtx, arg: Any) -> View:
@@ -425,7 +424,7 @@ class BroadcastScreens:
         rows.append([nav_button(_T["seg_dsl"], ACTIONS, "dsl", a)])
         if bc.segment.get("dsl"):
             rows.append([nav_button(_T["seg_nodsl"], ACTIONS, "nodsl", a)])
-        rows.append([nav_button(_T["to_card"], SCREEN_CARD, arg=a)])
+        rows.append(nav.with_admin([nav_button(_T["to_card"], SCREEN_CARD, arg=a)]))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     async def _confirm_screen(self, ctx: ScreenCtx, arg: Any) -> View | Redirect:
@@ -731,12 +730,11 @@ def setup(router: ScreenRouter, deps: _Deps) -> Router:
     def config() -> AudienceConfig:
         try:
             current = settings.current() if settings is not None else {}
-            lang = current["DEFAULT_LANGUAGE"] or "ru"
             channel = current["REQUIRED_CHANNEL_ID"]
         except (KeyError, AttributeError, RuntimeError, TypeError):
             return AudienceConfig()
         cid = channel if isinstance(channel, int) and not isinstance(channel, bool) and channel != 0 else None
-        return AudienceConfig(default_lang=str(lang), channel_id=cid)
+        return AudienceConfig(channel_id=cid)
 
     screens, sender = build(router, deps.db, deps.notifier, config=config)
     register = getattr(deps, "register_job", None)

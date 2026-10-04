@@ -534,7 +534,7 @@ class DashboardScreens:
 
     async def view(self, user: UserCtx, *, refresh: bool = False) -> View:
         stats = await self.dashboard.get(refresh=refresh)
-        lines = [_T["title"], _esc(nav.breadcrumb(SCREEN)), ""]
+        lines = [nav.header(SCREEN), ""]
         if stats is None:
             lines.append(_T["unavailable"])
         else:
@@ -548,10 +548,13 @@ class DashboardScreens:
         if nav.has_screen(self.router, OPS_SCREEN) and roles.authorize(actor, Act.STATS):
             top.append(nav_button(_T["b_report"], OPS_SCREEN, "rep"))
         rows.append(top)
+        more: list[InlineKeyboardButton] = []
         if nav.has_screen(self.router, SLICE_SCREEN) and user.has_perm("settings.business"):
-            rows.append([nav_button(_T["b_daily"], SLICE_SCREEN, arg="st.report")])
+            more.append(nav_button(_T["b_daily"], SLICE_SCREEN, arg="st.report"))
         if nav.has_screen(self.router, ADS_SCREEN) and user.has_perm("promo"):
-            rows.append([nav_button(_T["b_ads"], ADS_SCREEN)])
+            more.append(nav_button(_T["b_ads"], ADS_SCREEN))
+        if more:
+            rows.append(more)
         rows.append(nav.back_row(SCREEN))
         return rows
 

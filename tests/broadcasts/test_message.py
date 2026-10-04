@@ -180,7 +180,7 @@ def test_premium_emoji_at_the_start_becomes_the_icon() -> None:
     buttons = parse_buttons(text, entities)
     assert "icon_custom_emoji_id" not in buttons[0]
     assert buttons[1]["icon_custom_emoji_id"] == EMOJI_ID and buttons[1]["label"]["ru"] == "Тарифы"
-    markup = build_markup(buttons, "en")
+    markup = build_markup(buttons, "ru")
     assert markup is not None and markup.inline_keyboard[1][0].icon_custom_emoji_id == EMOJI_ID
 
 

@@ -1,14 +1,16 @@
-"""Home card, language, the free trial in one button, the required-channel gate and the ``/start`` hook.
+"""Home card, the free trial in one button, the required-channel gate and the ``/start`` hook.
 
 * ``home`` — the status card (subscription, until, days left, balance) with ≤ 7 content buttons whose
-  visibility follows the status (``sub``, ``flag:trial``…) plus «💬 Поддержка» (a plain ``SUPPORT_URL`` link).
-  One SQL (the status), no HTTP.
+  visibility follows the status (``sub``, ``flag:trial``…): «🔗 Подключиться», «👤 Профиль · {left}» (the
+  time left and the colour of the subscription; the profile is the subscription section too), «💰 Баланс»
+  + «🤝 Пригласить», the trial, «ℹ️ Информация» + «💬 Поддержка» (drawn here by ``SUPPORT_MODE``) and the
+  staff «🛠 Админка». One SQL (the status), no HTTP.
 * ``sys:trial`` — «🎁 Попробовать бесплатно»: checks (one SQL, plus a cached channel check), then the trial,
   the panel job and the «ready» job in **one** transaction; the same message later turns into «✅ Готово +
   🔗 Подключиться» by itself (job ``user.ui_ready`` runs after the panel job: same ``ordering_key``).
 * ``chan`` — «Подпишитесь на канал» with «✅ Я подписался» (a fresh ``getChatMember``); after a successful
   check the trial (or the menu) continues.
-* ``lang`` — the language list; the choice is stored and the cached context dropped.
+* ``lang`` — gone (the bot is Russian-only): an old button or message that still points there opens home.
 * ``/start`` — the deep link is kept as the pending intent, then the entry captcha
   (:mod:`svbg.tg.user.captcha`) for a user who has not passed it, then the channel gate when required.
 """
@@ -17,7 +19,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -31,7 +32,6 @@ from svbg.tg.user import seeds
 from svbg.tg.user.base import Base
 from svbg.tg.user.deeplink import DeepLink
 from svbg.tg.user.deps import cfg_str
-from svbg.tg.user.directory import SUPPORTED_LANGS
 from svbg.tg.user.jobs import enqueue_ui_ready
 from svbg.tg.user.render import screen_view
 from svbg.tg.user.subscription import apply_sub_button, sub_button, sub_thresholds
@@ -48,19 +48,23 @@ log = logging.getLogger("svbg.tg.user.home")
 
 #: ``CHANNEL_REQUIRED_FOR``: ``trial`` (default — only the trial needs the channel, 06 M2) or ``all``.
 CHANNEL_GATE_ALL: Final = "all"
-_LANG_LABELS: Final = {"ru": "btn_lang_ru", "en": "btn_lang_en"}
 _SYS_ALIASES: Final = {
     "buy": seeds.BUY,
-    "sub": seeds.SUB,
+    "sub": seeds.PROFILE,  # the old «Подписка» section is the profile now
+    "profile": seeds.PROFILE,
     "topup": seeds.BALANCE,
     "connect": seeds.CONNECT,
     "devices": seeds.DEVICES,
-    "lang": seeds.LANG,
+    "lang": seeds.HOME,  # the language picker is gone
 }
+#: The old language picker's screen code: a button the owner kept or an old message still points there.
+_OLD_LANG: Final = "lang"
 
 
 #: The staff entry of home (``admin`` is the code alias of the admin root ``adm``).
 _STAFF_TARGETS: Final = frozenset({codec.encode("admin"), codec.encode("adm")})
+#: «ℹ️ Информация» of home: «💬 Поддержка» goes next to it.
+_INFO_TARGET: Final = codec.encode("info")
 
 
 def _rows(keyboard: Any) -> list[list[InlineKeyboardButton]]:
@@ -74,14 +78,19 @@ def _rows(keyboard: Any) -> list[list[InlineKeyboardButton]]:
 def _with_support(
     rows: list[list[InlineKeyboardButton]], support: list[list[InlineKeyboardButton]]
 ) -> list[list[InlineKeyboardButton]]:
-    """``support`` above the trailing staff rows (at the very bottom when there are none)."""
+    """``support`` next to «ℹ️ Информация» when that row has room, else on its own row above the trailing
+    staff rows (at the very bottom when there are none)."""
+    flat = [b for row in support for b in row]
+    for i, row in enumerate(rows):
+        if flat and len(row) == 1 and row[0].callback_data == _INFO_TARGET:
+            return [*rows[:i], [*row, *flat], *rows[i + 1 :]]
     cut = len(rows)
     while cut > 0 and rows[cut - 1] and all(b.callback_data in _STAFF_TARGETS for b in rows[cut - 1]):
         cut -= 1
     return [*rows[:cut], *support, *rows[cut:]]
 
 
-#: Called after an onboarding step is done (channel joined, language picked): the consent page or the kept
+#: Called after an onboarding step is done (channel joined, captcha passed): the consent page or the kept
 #: deep-link intent (decision C9 of the integration). ``None`` → the step's own screen.
 AfterOnboarding = Callable[["ScreenCtx"], Awaitable["HandlerResult | None"]]
 
@@ -106,9 +115,8 @@ class HomeScreens(Base):
 
     def register(self, router: ScreenRouter) -> None:
         router.screen(seeds.HOME)(self.home)
-        router.screen(seeds.LANG)(self.lang_screen)
+        router.screen(_OLD_LANG)(self._alias(seeds.HOME))
         router.screen(seeds.CHANNEL)(self.channel_screen)
-        router.action(seeds.LANG, "set")(self.set_lang)
         router.action(seeds.CHANNEL, "check")(self.channel_check)
         router.action("sys", "trial")(self.trial)
         for name, target in _SYS_ALIASES.items():
@@ -125,42 +133,14 @@ class HomeScreens(Base):
     # ------------------------------------------------------------------ home
 
     async def home(self, ctx: ScreenCtx, _arg: Any) -> View:
-        """The card; «📱 Подписка» gets the time left and its colour from the status read here (no extra SQL),
-        «💬 Поддержка» goes right above the staff row, as in Bedolaga's menu."""
+        """The card; «👤 Профиль» gets the time left and its colour from the status read here (no extra SQL),
+        «💬 Поддержка» goes next to «ℹ️ Информация» (or right above the staff row without it)."""
         status = await self.enrich(ctx)
         lang = ctx.lang
         view = screen_view(ctx, seeds.HOME, self.status_values(status, lang))
         blue, red = sub_thresholds(self.deps.config)
         rows = apply_sub_button(_rows(view.keyboard), sub_button(status, lang, blue_days=blue, red_days=red))
         view.keyboard = _with_support(rows, self.support_row(lang))
-        return view
-
-    # ------------------------------------------------------------------ language
-
-    async def lang_screen(self, ctx: ScreenCtx, _arg: Any) -> View:
-        rows = [
-            [
-                nav_button(
-                    ("• " if code == ctx.lang else "") + t(ctx.lang, _LANG_LABELS[code]),
-                    seeds.LANG,
-                    "set",
-                    code,
-                )
-            ]
-            for code in sorted(SUPPORTED_LANGS, key=lambda c: (c != "ru", c))
-            if code in _LANG_LABELS
-        ]
-        return screen_view(ctx, seeds.LANG, top=rows)
-
-    async def set_lang(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:
-        if not isinstance(arg, str) or arg not in SUPPORTED_LANGS:
-            return Redirect(seeds.LANG)
-        await self.deps.users.set_language(ctx.user.user_id, ctx.user.telegram_id, arg)
-        ctx.user = replace(ctx.user, lang=arg, _placeholders=None)
-        if (resumed := await self._resume(ctx)) is not None:
-            return resumed
-        view = await self.home(ctx, None)
-        view.toast = t(arg, "lang_set")
         return view
 
     # ------------------------------------------------------------------ channel gate

@@ -55,6 +55,7 @@ from svbg.core.tables import users
 from svbg.services import roles
 from svbg.services.roles import Act, Actor
 from svbg.subscriptions.lifecycle import MAX_DAYS
+from svbg.tg.admin import nav
 from svbg.tg.admin.users import queries
 from svbg.tg.admin.users.ops import OpResult, UserOps, signed_money
 from svbg.tg.admin.users.search import QueryError, parse_query, search
@@ -911,10 +912,12 @@ class UserScreens:
 
         # An admin never grants days, plans or money to themselves (UserOps refuses it too).
         own = card.user_id == viewer.user_id and viewer.role != "owner"
+        # grouped by topic, two per row: subscription, money, devices, contact
         if _can(viewer, Act.SUBS_GRANT) and not own:
             if card.live:
                 add(nav_button(_T["b_days"], SCREEN_DAYS, arg=uid))
             add(nav_button(_T["b_plan"], SCREEN_PLANS, arg=uid))
+        flush()
         if _can(viewer, Act.WALLET_ADJUST) and not own:
             add(nav_button(_T["b_wallet"], ACTIONS, "wal", uid))
         if viewer.at_least("admin"):
@@ -940,9 +943,10 @@ class UserScreens:
             ]
         )
         if viewer.has_perm("roles.manage") and card.user_id != viewer.user_id:  # owner or a team manager
-            rows.append([nav_button(_T["b_role"], ROLE_SCREEN, arg=uid)])
+            add(nav_button(_T["b_role"], ROLE_SCREEN, arg=uid))
         if can_delete:
-            rows.append([nav_button(_T["b_delete"], SCREEN_DELETE, arg=f"{uid}:1", style="danger")])
+            add(nav_button(_T["b_delete"], SCREEN_DELETE, arg=f"{uid}:1", style="danger"))
+        flush()
         if card.subscription_url and card.subscription_url.startswith(("https://", "http://")):
             link = card.subscription_url[:256]
             rows.append([InlineKeyboardButton(text=_T["b_copy_link"], copy_text=CopyTextButton(text=link))])
@@ -974,7 +978,7 @@ class UserScreens:
         rows: list[list[InlineKeyboardButton]] = []
         if more is not None:
             rows.append([more])
-        rows.append([nav_button(_T["to_card"], SCREEN_CARD, arg=str(uid))])
+        rows.append(nav.with_admin([nav_button(_T["to_card"], SCREEN_CARD, arg=str(uid))]))
         body = "\n".join(lines) if lines else _T["empty"]
         return View(text=f"{title}\n\n{body}", parse_mode="HTML", keyboard=rows)
 
@@ -1110,7 +1114,7 @@ class UserScreens:
             ]
             for p in plans[:30]
         ]
-        rows.append([nav_button(_T["to_card"], SCREEN_CARD, arg=str(uid))])
+        rows.append(nav.with_admin([nav_button(_T["to_card"], SCREEN_CARD, arg=str(uid))]))
         text = _T["plans_title"].format(who=who) if plans else _T["plans_empty"]
         return View(text=text, parse_mode="HTML", keyboard=rows)
 
@@ -1143,7 +1147,7 @@ class UserScreens:
         ]
         rows = [buttons[:3], buttons[3:5], buttons[5:]]
         rows.append([nav_button(_T["b_custom"], ACTIONS, "days", str(uid))])
-        rows.append([nav_button(_T["to_card"], SCREEN_CARD, arg=str(uid))])
+        rows.append(nav.with_admin([nav_button(_T["to_card"], SCREEN_CARD, arg=str(uid))]))
         return View(text=_T["days_title"].format(who=who), parse_mode="HTML", keyboard=rows)
 
     async def _a_day_preset(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:

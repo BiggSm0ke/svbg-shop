@@ -21,7 +21,6 @@ DEFAULTS: Final[Mapping[str, Any]] = {
     "WALLET_TOPUP_MAX": 100_000,
     "PAY_STARS_RATE": "1",  # CURRENCY per ⭐
     "TIMEZONE": "Europe/Moscow",
-    "DEFAULT_LANGUAGE": "ru",  # notices for a user without a stored language
 }
 
 
@@ -40,7 +39,6 @@ class BillingConfig:
     topup_max_minor: int
     stars_rate_minor: int | None  # None: misconfigured rate (Stars top-ups refused)
     timezone: str
-    default_lang: str = "ru"
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> BillingConfig:
@@ -60,7 +58,4 @@ class BillingConfig:
             rate: int | None = parse_stars_rate(get("PAY_STARS_RATE"), currency)
         except (WalletRuleError, ValueError):
             rate = None
-        lang = str(get("DEFAULT_LANGUAGE")).strip().lower()[:2]
-        return cls(
-            currency, minutes, lo, hi, rate, str(get("TIMEZONE")), lang if lang in ("ru", "en") else "ru"
-        )
+        return cls(currency, minutes, lo, hi, rate, str(get("TIMEZONE")))

@@ -27,7 +27,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
@@ -154,8 +154,6 @@ CONDITION_PRESETS: Final[tuple[tuple[str, Mapping[str, Any] | None], ...]] = (
     ("Мало денег (баланс < 100)", {"balance_minor": {"lt": 10_000}}),
     ("Только админам", {"role": {"gte": "admin"}}),
     ("Поддержке и выше", {"role": {"gte": "support"}}),
-    ("Язык: русский", {"lang": "ru"}),
-    ("Язык: English", {"lang": "en"}),
 )
 
 #: «Как видит…» states: code → (title, UserCtx fields).
@@ -202,7 +200,6 @@ _T: Final[Mapping[str, str]] = {
     "draft_lost": "Мастер устарел — начните заново",
     "cancelled": "Отменено",
     "home": (
-        "🎨 Конструктор экранов\n\n"
         "Режим «✏️»: {mode}. Включите его и откройте любой экран — внизу появится служебный ряд "
         "«✏️ Экран · ➕ Кнопка · 👁 Как видит…», а нажатие на кнопку откроет её редактор. Изменения "
         "применяются сразу, «↩️ Отменить» работает 10 минут.\n\n"
@@ -211,20 +208,18 @@ _T: Final[Mapping[str, str]] = {
     "mode_on": "✏️ Режим правки включён",
     "mode_off": "Режим правки выключен",
     "wait_text": (
-        "📝 Пришлите новый текст экрана ({lang}) одним сообщением. Форматирование (жирный, ссылки, спойлеры, "
-        "премиум-эмодзи) сохранится как есть. Плейсхолдеры: {{balance}}, {{days_left}}.\n\n/cancel — отмена"
+        "📝 Пришлите новый текст экрана одним сообщением. Форматирование (жирный, ссылки, спойлеры, "
+        "премиум-эмодзи) сохранится как есть. Плейсхолдеры: {balance}, {days_left}.\n\n/cancel — отмена"
     ),
     "wait_media": ("🖼 Пришлите фото, GIF или видео для экрана (до 20 МБ).\n\n/cancel — отмена"),
-    "wait_label": (
-        "🔤 Пришлите текст кнопки ({lang}), до 128 символов. Можно с плейсхолдерами.\n\n/cancel — отмена"
-    ),
+    "wait_label": ("🔤 Пришлите текст кнопки, до 128 символов. Можно с плейсхолдерами.\n\n/cancel — отмена"),
     "wait_icon": (
         "😀 Пришлите премиум-эмодзи (одно, сообщением) или стикер из набора эмодзи — он станет иконкой "
         "кнопки.\n\n/cancel — отмена"
     ),
     "wait_dsl": (
         '✍️ Пришлите условие в JSON, например {"all": [{"sub": "active"}, {"days_left": {"lte": 3}}]}.\n'
-        "Атомы: role, lang, sub (none/trial/active/expired/frozen), days_left, balance_minor, has_paid, "
+        "Атомы: role, sub (none/trial/active/expired/frozen), days_left, balance_minor, has_paid, "
         "is_new, channel_member, ref_count, source, plan, flag:<имя>, segment:<тег>; any / all / not.\n"
         "«-» — убрать условие.\n\n/cancel — отмена"
     ),
@@ -232,7 +227,7 @@ _T: Final[Mapping[str, str]] = {
         "➕ Новый экран. Пришлите название, например «Акция мая». Можно с кодом латиницей в начале — "
         "«may_sale Акция мая»: по коду на экран можно ссылаться из кнопок и диплинков.\n\n/cancel — отмена"
     ),
-    "wait_rename": "✏️ Пришлите новое название экрана ({lang}).\n\n/cancel — отмена",
+    "wait_rename": "✏️ Пришлите новое название экрана.\n\n/cancel — отмена",
     "text_only": "Нужен текст. Медиа меняется кнопкой «🖼 Медиа».",
     "media_only": "Нужно фото, GIF или видео (не файлом-документом).",
     "too_big_download": (
@@ -367,7 +362,6 @@ class ContentScreens:
         premium: PremiumService | None = None,
         owner_ids: OwnerIds | None = None,
         download: Downloader | None = None,
-        langs: Callable[[], Sequence[str]] = lambda: ("ru", "en"),
         public_url: Callable[[], str | None] | None = None,
     ) -> None:
         self.router = router
@@ -379,7 +373,6 @@ class ContentScreens:
         self.premium = premium
         self.owner_ids = owner_ids
         self.download = download
-        self.langs = langs
         self.public_url = public_url
         self._captures: dict[int, _Capture] = {}
         self._drafts: dict[int, _Draft] = {}
@@ -512,11 +505,9 @@ class ContentScreens:
         return found
 
     def _langs(self, entry: ScreenEntry | None = None) -> list[str]:
-        out: list[str] = []
-        for lang in [*self.langs(), *((entry.screen.body.keys()) if entry else ())]:
-            if lang not in out:
-                out.append(lang)
-        return out
+        """The texts the editor offers: Russian only (old ``en`` texts stay in the database unused)."""
+        del entry
+        return ["ru"]
 
     async def _owners(self) -> frozenset[int]:
         if self.owner_ids is None:
@@ -606,7 +597,9 @@ class ContentScreens:
         premium = self.premium.state.label if self.premium is not None else "проверка не настроена"
         banner_on, banner_free = self.banner_counts()
         text = (
-            _T["home"].format(mode="включён" if on else "выключен", premium=premium)
+            nav.breadcrumb(SCREEN_HOME)
+            + "\n\n"
+            + _T["home"].format(mode="включён" if on else "выключен", premium=premium)
             + "\n\n"
             + _T["banner"].format(on=banner_on, free=banner_free)
             + self._note(ctx.user)
@@ -644,16 +637,18 @@ class ContentScreens:
             off = " 🚫" if not e.screen.enabled else ""
             code = f" · {e.code}" if e.code else ""
             rows.append([nav_button(f"{icon} {_title(e)[:40]}{code}{off}", SCREEN_EDITOR, arg=str(e.id))])
-        nav: list[InlineKeyboardButton] = []
+        pager: list[InlineKeyboardButton] = []
         if page > 0:
-            nav.append(nav_button("⬅️", SCREEN_LIST, arg=str(page - 1)))
+            pager.append(nav_button("⬅️", SCREEN_LIST, arg=str(page - 1)))
         if page + 1 < pages:
-            nav.append(nav_button("➡️", SCREEN_LIST, arg=str(page + 1)))
-        if nav:
-            rows.append(nav)
-        rows.append([nav_button("➕ Новый экран", ACTIONS, "ns"), nav_button("⬅️ Назад", SCREEN_HOME)])
+            pager.append(nav_button("➡️", SCREEN_LIST, arg=str(page + 1)))
+        if pager:
+            rows.append(pager)
+        rows.append([nav_button("➕ Новый экран", ACTIONS, "ns")])
+        rows.append(nav.back_row(SCREEN_LIST))
         text = (
-            f"📋 Экраны ({len(entries)}), стр. {page + 1}/{pages}\n⚙️ — системные (путь покупки), 📄 — свои."
+            f"{nav.breadcrumb(SCREEN_LIST)}\n\n"
+            f"Всего {len(entries)}, страница {page + 1} из {pages}. ⚙️ системные (путь покупки), 📄 свои."
             + self._note(ctx.user)
         )
         return View(text=text, keyboard=rows)
@@ -675,7 +670,8 @@ class ContentScreens:
             media_line = "🖼 заглушка (картинка по умолчанию)"
         mode = "вложение" if s.media_mode == "attach" else "превью-ссылка"
         limit = CAPTION_LIMIT if media and self.editor.as_attachment(s.media_mode) else MAX_TEXT
-        texts = ", ".join(f"{lang} ({utf16_len(b.text)}/{limit})" for lang, b in s.body.items()) or "нет"
+        block = s.body.get("ru") or next(iter(s.body.values()), None)
+        texts = f"{utf16_len(block.text)} из {limit} знаков" if block is not None else "нет"
         disabled = sum(1 for b in s.buttons if not b.enabled)
         conditional = sum(1 for b in s.buttons if b.visible_if)
         lines = [
@@ -684,7 +680,7 @@ class ContentScreens:
             + ("" if s.enabled else " · 🚫 выключен"),
             f"Версия {ver}" + (f" · изменён {s.updated_at:%d.%m %H:%M} UTC" if s.updated_at else ""),
             f"Медиа: {media_line} · режим: {mode}",
-            f"Тексты: {texts}",
+            f"Текст: {texts}",
             f"Кнопок: {len(s.buttons)} (выключено {disabled}, с условием {conditional})",
         ]
         if s.media_mode == "preview" and media and not (self.public_url and self.public_url()):
@@ -695,12 +691,7 @@ class ContentScreens:
         undo = self._undo_row(user, s.id)
         if undo:
             rows.append(undo)
-        rows.append(
-            [
-                nav_button(f"📝 Текст {lang.upper()}", ACTIONS, "tx", f"{sid}.{lang}")
-                for lang in self._langs(entry)
-            ]
-        )
+        rows.append([nav_button("📝 Текст", ACTIONS, "tx", f"{sid}.{lang}") for lang in self._langs(entry)])
         media_row = [nav_button("🖼 Медиа", ACTIONS, "md", sid)]
         if s.media_id is not None:
             other = "превью-ссылка" if s.media_mode == "attach" else "вложение"
@@ -727,7 +718,8 @@ class ContentScreens:
             )
             manage.append(nav_button("🗑 Удалить", SCREEN_DELETE, arg=f"{sid}.{ver}"))
         rows.append(manage)
-        rows.append([nav_button("▶️ Открыть экран", s.code or sid), nav_button("📋 Все экраны", SCREEN_LIST)])
+        rows.append([nav_button("▶️ Открыть экран", s.code or sid)])
+        rows.append(nav.with_admin([nav_button("⬅️ Экраны", SCREEN_LIST)]))
         return View(text="\n".join(lines) + self._note(user), keyboard=rows)
 
     async def _buttons_screen(self, ctx: ScreenCtx, arg: Any) -> View:
@@ -737,19 +729,15 @@ class ContentScreens:
         page = min(_int(page_s) or 0, len(pages) - 1)
         rows = list(pages[page])
         if len(pages) > 1:
-            nav: list[InlineKeyboardButton] = []
+            pager: list[InlineKeyboardButton] = []
             if page > 0:
-                nav.append(nav_button("⬅️", SCREEN_BUTTONS, arg=f"{entry.id}.{page - 1}"))
-            nav.append(nav_button(f"{page + 1}/{len(pages)}", SCREEN_BUTTONS, arg=f"{entry.id}.{page}"))
+                pager.append(nav_button("⬅️", SCREEN_BUTTONS, arg=f"{entry.id}.{page - 1}"))
+            pager.append(nav_button(f"{page + 1}/{len(pages)}", SCREEN_BUTTONS, arg=f"{entry.id}.{page}"))
             if page + 1 < len(pages):
-                nav.append(nav_button("➡️", SCREEN_BUTTONS, arg=f"{entry.id}.{page + 1}"))
-            rows.append(nav)
-        rows.append(
-            [
-                nav_button("➕ Кнопка", ACTIONS, "nb", str(entry.id)),
-                nav_button("⬅️ К экрану", SCREEN_EDITOR, arg=str(entry.id)),
-            ]
-        )
+                pager.append(nav_button("➡️", SCREEN_BUTTONS, arg=f"{entry.id}.{page + 1}"))
+            rows.append(pager)
+        rows.append([nav_button("➕ Кнопка", ACTIONS, "nb", str(entry.id))])
+        rows.append(nav.with_admin([nav_button("⬅️ К экрану", SCREEN_EDITOR, arg=str(entry.id))]))
         text = (
             f"🔘 Кнопки экрана «{_title(entry)}» — как в Telegram, по рядам. "
             "Нажмите кнопку, чтобы изменить её.\n"
@@ -802,7 +790,7 @@ class ContentScreens:
             "text",
             {"sid": entry.id, "ver": entry.screen.version, "lang": lang},
             (SCREEN_EDITOR, str(entry.id)),
-            _T["wait_text"].format(lang=lang),
+            _T["wait_text"],
         )
 
     async def _a_media(self, ctx: ScreenCtx, arg: Any) -> View:
@@ -875,7 +863,7 @@ class ContentScreens:
             "rename",
             {"sid": entry.id, "ver": entry.screen.version, "lang": ctx.lang},
             (SCREEN_EDITOR, str(entry.id)),
-            _T["wait_rename"].format(lang=ctx.lang),
+            _T["wait_rename"],
         )
 
     async def _a_screen_enabled(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:
@@ -992,7 +980,7 @@ class ContentScreens:
                     for code, (title, _f) in states[i : i + 3]
                 ]
             )
-        rows.append([nav_button("⬅️ К редактору", SCREEN_EDITOR, arg=str(entry.id))])
+        rows.append(nav.with_admin([nav_button("⬅️ К редактору", SCREEN_EDITOR, arg=str(entry.id))]))
         view.keyboard = rows
         prefix = f"👁 Так видит: {PREVIEW_STATES[state][0]}\n\n"
         shift = len(prefix.encode("utf-16-le")) // 2
@@ -1018,7 +1006,7 @@ class ContentScreens:
             if it.undoable(now, self.editor.undo_window) and len(rows) < 5:
                 rows.append([nav_button(f"↩️ {it.summary[:48]}", ACTIONS, "undo", it.batch_id)])
         lines.append("\n«↩️» отменяет изменение в течение 10 минут, если экран после него не меняли.")
-        rows.append([nav_button("⬅️ К экрану", SCREEN_EDITOR, arg=str(entry.id))])
+        rows.append(nav.with_admin([nav_button("⬅️ К экрану", SCREEN_EDITOR, arg=str(entry.id))]))
         return View(text="\n".join(lines) + self._note(ctx.user), keyboard=rows)
 
     async def _wait_screen(self, ctx: ScreenCtx, _arg: Any) -> HandlerResult:
@@ -1069,10 +1057,8 @@ class ContentScreens:
     def button_view(self, user: UserCtx, entry: ScreenEntry, b: Button) -> View:
         assert b.id is not None
         bid, ver = str(b.id), entry.screen.version
-        labels = ", ".join(f"{lang} «{text}»" for lang, text in b.label.items())
         lines = [
-            f"🔘 Кнопка «{_first(b.label, user.lang)}» · экран «{_title(entry)}»",
-            f"Текст: {labels}",
+            f"🔘 Кнопка «{_first(b.label)}» · экран «{_title(entry)}»",
             f"Иконка: {b.icon_custom_emoji_id or 'нет'}",
             f"Цвет: {STYLE_LABELS.get(b.style, b.style or '')}",
             f"Действие: {self._describe_action(b)}",
@@ -1092,12 +1078,7 @@ class ContentScreens:
         undo = self._undo_row(user, entry.id)
         if undo:
             rows.append(undo)
-        rows.append(
-            [
-                nav_button(f"🔤 Текст {lang.upper()}", ACTIONS, "b.lb", f"{bid}.{lang}")
-                for lang in self._langs(entry)
-            ]
-        )
+        rows.append([nav_button("🔤 Текст", ACTIONS, "b.lb", f"{bid}.{lang}") for lang in self._langs(entry)])
         icon_row = [nav_button("😀 Иконка", ACTIONS, "b.ic", bid)]
         if b.icon_custom_emoji_id:
             icon_row.append(nav_button("✖️ Без иконки", ACTIONS, "b.icx", f"{bid}.{ver}"))
@@ -1116,11 +1097,12 @@ class ContentScreens:
         if not b.system_key:
             state_row.append(nav_button("🗑 Удалить", ACTIONS, "b.del", f"{bid}.{ver}"))
         rows.append(state_row)
-        nav = [nav_button("⬅️ К экрану", SCREEN_EDITOR, arg=str(entry.id))]
+        jump: list[InlineKeyboardButton] = []
         if screen_action_target(b.action.to_json()) is not None:
-            nav.append(nav_button("➡️ Перейти", ACTIONS, "b.go", bid))
-        nav.append(nav_button("▶️ Открыть экран", entry.code or str(entry.id)))
-        rows.append(nav)
+            jump.append(nav_button("➡️ Перейти", ACTIONS, "b.go", bid))
+        jump.append(nav_button("▶️ Открыть экран", entry.code or str(entry.id)))
+        rows.append(jump)
+        rows.append(nav.with_admin([nav_button("⬅️ К экрану", SCREEN_EDITOR, arg=str(entry.id))]))
         return View(text="\n".join(lines) + self._note(user), keyboard=rows)
 
     # ------------------------------------------------------------ button actions
@@ -1148,7 +1130,7 @@ class ContentScreens:
             "label",
             {"sid": entry.id, "ver": entry.screen.version, "lang": lang, "new": True},
             (SCREEN_EDITOR, str(entry.id)),
-            "➕ Новая кнопка, шаг 1 из 2.\n" + _T["wait_label"].format(lang=lang),
+            "➕ Новая кнопка, шаг 1 из 2.\n" + _T["wait_label"],
         )
 
     async def _a_label(self, ctx: ScreenCtx, arg: Any) -> View:
@@ -1164,7 +1146,7 @@ class ContentScreens:
             "label",
             {"bid": b.id, "ver": entry.screen.version, "lang": lang},
             (SCREEN_BUTTON, str(b.id)),
-            _T["wait_label"].format(lang=lang),
+            _T["wait_label"],
         )
 
     async def _a_icon(self, ctx: ScreenCtx, arg: Any) -> View:
@@ -1195,7 +1177,7 @@ class ContentScreens:
             ]
             for style in (None, "primary", "success", "danger")
         ]
-        rows.append([nav_button("⬅️ Назад", SCREEN_BUTTON, arg=bid)])
+        rows.append(nav.with_admin([nav_button("⬅️ Назад", SCREEN_BUTTON, arg=bid)]))
         return View(text="🎨 Цвет кнопки (так он выглядит в Telegram):", keyboard=rows)
 
     async def _a_style(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:
@@ -1271,14 +1253,14 @@ class ContentScreens:
             ]
             for e in entries[page * PAGE : (page + 1) * PAGE]
         ]
-        nav: list[InlineKeyboardButton] = []
+        pager: list[InlineKeyboardButton] = []
         if page > 0:
-            nav.append(nav_button("⬅️", SCREEN_TARGET, arg=f"{ref}.{page - 1}"))
+            pager.append(nav_button("⬅️", SCREEN_TARGET, arg=f"{ref}.{page - 1}"))
         if page + 1 < pages:
-            nav.append(nav_button("➡️", SCREEN_TARGET, arg=f"{ref}.{page + 1}"))
-        if nav:
-            rows.append(nav)
-        rows.append([nav_button("⬅️ Назад", SCREEN_ACTION, arg=ref)])
+            pager.append(nav_button("➡️", SCREEN_TARGET, arg=f"{ref}.{page + 1}"))
+        if pager:
+            rows.append(pager)
+        rows.append(nav.with_admin([nav_button("⬅️ Назад", SCREEN_ACTION, arg=ref)]))
         return View(text=f"📄 На какой экран ведёт кнопка? (стр. {page + 1}/{pages})", keyboard=rows)
 
     @staticmethod
@@ -1295,7 +1277,7 @@ class ContentScreens:
         self._draft_or_button(ref, ctx.user)
         names = self.system_actions()
         rows = self._grid((nav_button(name, ACTIONS, "b.sy", f"{ref}.{name}") for name in names), 3)
-        rows.append([nav_button("⬅️ Назад", SCREEN_ACTION, arg=ref)])
+        rows.append(nav.with_admin([nav_button("⬅️ Назад", SCREEN_ACTION, arg=ref)]))
         text = "⚙️ Системное действие (покупка, продление, пополнение, подключение…):"
         if not names:
             text = "Системных действий пока нет."
@@ -1328,7 +1310,7 @@ class ContentScreens:
             except ValueError:  # a name too long for callback data: cannot be picked here
                 log.warning("module action %s does not fit a callback", name)
         rows = self._grid(buttons, 2)
-        rows.append([nav_button("⬅️ Назад", SCREEN_ACTION, arg=ref)])
+        rows.append(nav.with_admin([nav_button("⬅️ Назад", SCREEN_ACTION, arg=ref)]))
         text = "🧩 Действие модуля (кнопка запустит его у пользователя):"
         if not buttons:
             text = "Модули пока не дают действий для кнопок."
@@ -1400,7 +1382,7 @@ class ContentScreens:
             for i, (title, dsl) in enumerate(CONDITION_PRESETS)
         ]
         rows.append([nav_button("✍️ Своё условие (DSL)", ACTIONS, "b.cdx", bid)])
-        rows.append([nav_button("⬅️ Назад", SCREEN_BUTTON, arg=bid)])
+        rows.append(nav.with_admin([nav_button("⬅️ Назад", SCREEN_BUTTON, arg=bid)]))
         text = (
             f"👁 Кому видна кнопка? Сейчас: {_describe_condition(b.visible_if)}.\n"
             "Проверка идёт на каждом клике по уже загруженным данным — без запросов к базе."
@@ -1454,7 +1436,7 @@ class ContentScreens:
                 nav_button("⬇️", ACTIONS, "b.mv", f"{bid}.{ver}.down"),
                 nav_button("➡️", ACTIONS, "b.mv", f"{bid}.{ver}.right"),
             ],
-            [nav_button("✅ Готово", SCREEN_BUTTON, arg=bid)],
+            nav.with_admin([nav_button("✅ Готово", SCREEN_BUTTON, arg=bid)]),
         ]
         return View(text="\n".join(lines) + self._note(ctx.user), keyboard=rows)
 
@@ -1652,7 +1634,7 @@ class ContentScreens:
                 d["bid"],
                 expected_version=d["ver"],
                 actor=actor,
-                summary=f"Текст кнопки ({d['lang']})",
+                summary="Текст кнопки",
                 label={d["lang"]: label},
             )
             self._remember(user, result)

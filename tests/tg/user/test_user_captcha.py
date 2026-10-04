@@ -224,14 +224,14 @@ async def test_channel_gate_and_own_emojis_after_the_captcha(pg_dsn: str) -> Non
         env.config["CAPTCHA_EMOJIS"] = ["🐱", "🐶"]
         env.lookup.member = False
         uid, tg = await env.new_user(first_name="Ann")
-        await env.db.raw("update users set language = 'en' where id = $1", uid)
+        await env.db.raw("update users set language = 'en' where id = $1", uid)  # old data: ignored
         shown = await start(env, tg)
         assert sorted(shown.labels()) == ["🐱", "🐶"] and len(shown.markup.inline_keyboard) == 1  # type: ignore[union-attr]
-        assert shown.text == f"Quick check that you're not a bot\n\nTap {target_of(env, uid)}"
+        assert shown.text == f"Проверим, что вы не бот\n\nНажмите на {target_of(env, uid)}"
         await env.click(tg, tap_data(shown, wrong_of_two(env, uid)))
-        assert env.tg.toasts()[-1] == "Wrong one, try again"
+        assert env.tg.toasts()[-1] == "Не то. Попробуйте ещё раз"
         gate = await env.click(tg, tap_data(env.tg.last(tg), target_of(env, uid)))
-        assert "Join our channel" in gate.text  # what /start shows next
+        assert "Подпишитесь на наш канал" in gate.text  # what /start shows next
 
 
 def wrong_of_two(env: UserEnv, uid: int) -> str:

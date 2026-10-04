@@ -38,8 +38,10 @@ wallet_users: Final = sa.table(
     sa.column("id", sa.BigInteger),
     sa.column("telegram_id", sa.BigInteger),
     sa.column("first_name", sa.Text),
+    sa.column("username", sa.Text),
     sa.column("wallet_minor", sa.BigInteger),
     sa.column("banned_at", UtcDateTime),
+    sa.column("created_at", UtcDateTime),
 )
 
 LIVE: Final = ("pending", "linked")
@@ -99,6 +101,8 @@ class UserStatus:
     banned: bool
     sub: SubInfo | None
     devices: DeviceCache | None = None
+    username: str | None = None
+    created_at: datetime | None = None
 
     def sub_state(self, at: datetime) -> str:
         sub = self.sub
@@ -198,8 +202,10 @@ def status_query(user_id: int, *, with_devices: bool = False) -> sa.Select[Any]:
         wallet_users.c.id.label("user_id"),
         wallet_users.c.telegram_id,
         wallet_users.c.first_name,
+        wallet_users.c.username,
         wallet_users.c.wallet_minor,
         wallet_users.c.banned_at,
+        wallet_users.c.created_at,
         has_paid.label("has_paid"),
         trial_used.label("trial_used"),
         had.label("had_subscription"),
@@ -260,6 +266,8 @@ def _status(row: Mapping[str, Any], with_devices: bool) -> UserStatus:
         banned=row["banned_at"] is not None,
         sub=sub,
         devices=devices,
+        username=row.get("username"),
+        created_at=row.get("created_at"),
     )
 
 

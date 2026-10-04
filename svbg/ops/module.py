@@ -72,7 +72,6 @@ _STOP_GRACE_S: Final = 10.0
 _CANCEL_GRACE_S: Final = 12.0
 
 _T: Final = {
-    "title": "💾 <b>Бэкапы и обновления</b>",
     "never": "Бэкап: ещё не делался",
     "last": "Последний бэкап: {when} · {size}{enc} · {sent}",
     "last_err": "🔴 Последняя попытка не удалась ({when}): {error}",
@@ -194,7 +193,7 @@ class OpsModule:
         snap = self.settings()
         tz_name = str(opt(snap, "TIMEZONE"))
         zone = zone_of(tz_name)
-        lines = [_T["title"], ""]
+        lines = [nav.header(SCREEN), ""]
         state = await self.state.get(K_BACKUP)
         last = state.get("last") if isinstance(state.get("last"), dict) else None
         if last:

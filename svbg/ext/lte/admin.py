@@ -782,8 +782,8 @@ def render_home_entry(call: SlotCall) -> SlotResult | None:
 # ----------------------------------------------------------------------------------------------- screens
 
 
-def overview_text(ov: Overview, cfg: Any, *, at: datetime) -> str:
-    lines = ["🌐 <b>Трафик LTE</b>"]
+def overview_text(ov: Overview, cfg: Any, *, at: datetime, title: str = "🌐 <b>Трафик LTE</b>") -> str:
+    lines = [title, ""]
     mode = MODES.get(cfg.mode, cfg.mode)
     off = "снять блоки" if cfg.off_action == "release" else "оставить блоки"
     lines.append(f"Применение: {mode} · при выключении: {off}")
@@ -856,7 +856,8 @@ def install(router: Any, service: Callable[[], LteService]) -> None:
         if ctx.user.role == "owner" and nav.has_screen(router, "set.v"):
             rows.append([nav_button("⚙️ Настройки", "set.v", arg="mod.lte")])
         rows.append(nav.back_row(SCREEN))
-        return View(text=overview_text(ov, cfg, at=now()), parse_mode="HTML", keyboard=rows)
+        text = overview_text(ov, cfg, at=now(), title=nav.header(SCREEN))
+        return View(text=text, parse_mode="HTML", keyboard=rows)
 
     @router.action(SCREEN, "mode", required_role="admin")
     async def set_mode(ctx: Any, arg: Any) -> Any:

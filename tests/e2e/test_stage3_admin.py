@@ -79,7 +79,7 @@ async def test_backup_then_restore_on_another_host(
         await owner.tap("✏️ Экран", expect="✏️ Экран «")
         await owner.tap("🖼 Медиа", expect="Пришлите фото")
         await owner.send_photo(jpeg_bytes(color=(0, 160, 60)), expect="⚡ Применено")
-        await owner.tap("📝 Текст RU", expect="Пришлите новый текст")
+        await owner.tap("📝 Текст", expect="Пришлите новый текст")
         await owner.say("Главная до бэкапа", expect="⚡ Применено")
         await shop.fund(OWNER_ID, 12_300)
         await owner.say("/edit", expect="Режим правки выключен")

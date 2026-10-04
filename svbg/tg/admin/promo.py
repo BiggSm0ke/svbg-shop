@@ -89,16 +89,16 @@ STATUS_TEXT: Final = {
 }
 
 _T: Final[dict[str, str]] = {
-    "list_title": "🎟 <b>Промокоды</b>",
     "list_empty": "Промокодов пока нет.",
     "list_hint": "Нажмите на промокод, чтобы изменить его.",
     "new": "➕ Новый промокод",
     "find": "🔎 Найти по коду",
     "prev": "◀️",
     "next": "▶️",
-    "to_list": "⬅️ К промокодам",
-    "to_card": "⬅️ К промокоду",
-    "kinds_title": "🎟 <b>Новый промокод</b>\nЧто он даёт?",
+    "to_list": "⬅️ Промокоды",
+    "to_card": "⬅️ Промокод",
+    "kinds_name": "➕ Новый промокод",
+    "kinds_hint": "Что он даёт?",
     "gift_title": "🎀 <b>Какой тариф подарить?</b>",
     "gift_none": "Тарифов пока нет — создайте тариф в /plans.",
     "plans_title": "📦 <b>Тарифы для скидки</b> · {code}\n"
@@ -392,7 +392,7 @@ class PromoAdminScreens:
         page = int(arg) if isinstance(arg, str) and arg.isdigit() and len(arg) < 6 else 0
         promos, total = await self.service.page(page * PAGE_SIZE, PAGE_SIZE)
         at = now()
-        lines = [_T["list_title"], "", _T["list_hint"] if total else _T["list_empty"]]
+        lines = [nav.header(SCREEN_LIST), "", _T["list_hint"] if total else _T["list_empty"]]
         rows: list[list[InlineKeyboardButton]] = []
         for p in promos:
             uses = f"{p.uses}/{p.max_uses}" if p.max_uses is not None else str(p.uses)
@@ -501,15 +501,16 @@ class PromoAdminScreens:
                 nav_button(_T["b_delete"], SCREEN_DELETE, arg=pid),
             ]
         rows.append(extra)
-        rows.append([nav_button(_T["to_list"], SCREEN_LIST)])
+        rows.append(nav.with_admin([nav_button(_T["to_list"], SCREEN_LIST)]))
         return View(text="\n".join(lines), parse_mode="HTML", keyboard=rows)
 
     # ------------------------------------------------------------ create
 
     async def _kinds_screen(self, ctx: ScreenCtx, _arg: Any) -> View:
-        rows = [[nav_button(KIND_TITLES[k], ACTIONS, "kind", k)] for k in KINDS]
-        rows.append([nav_button(_T["to_list"], SCREEN_LIST)])
-        return View(text=_T["kinds_title"], parse_mode="HTML", keyboard=rows)
+        rows = nav.pairs([nav_button(KIND_TITLES[k], ACTIONS, "kind", k) for k in KINDS])
+        rows.append(nav.with_admin([nav_button(_T["to_list"], SCREEN_LIST)]))
+        text = f"{nav.header(SCREEN_KINDS, _T['kinds_name'])}\n\n{_T['kinds_hint']}"
+        return View(text=text, parse_mode="HTML", keyboard=rows)
 
     async def _a_kind(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:
         if arg not in KINDS:
@@ -528,7 +529,7 @@ class PromoAdminScreens:
             if target == "new"
             else nav_button(_T["to_card"], SCREEN_CARD, arg=target)
         )
-        rows.append([back])
+        rows.append(nav.with_admin([back]))
         return View(text=_T["gift_title"] if plans else _T["gift_none"], parse_mode="HTML", keyboard=rows)
 
     async def _a_gift_plan(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:
@@ -635,7 +636,7 @@ class PromoAdminScreens:
             ]
             for p in self._plans()
         ]
-        rows.append([nav_button(_T["to_card"], SCREEN_CARD, arg=str(promo.id))])
+        rows.append(nav.with_admin([nav_button(_T["to_card"], SCREEN_CARD, arg=str(promo.id))]))
         return View(text=_T["plans_title"].format(code=_esc(promo.code)), parse_mode="HTML", keyboard=rows)
 
     async def _a_plan_toggle(self, ctx: ScreenCtx, arg: Any) -> HandlerResult:

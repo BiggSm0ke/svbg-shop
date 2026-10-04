@@ -35,11 +35,10 @@ if TYPE_CHECKING:
 
     from svbg.core.settings.store import DatabaseLike
 
-__all__ = ["SUPPORTED_LANGS", "UserDirectory"]
+__all__ = ["UserDirectory"]
 
 log = logging.getLogger("svbg.tg.user")
 
-SUPPORTED_LANGS: Final = frozenset({"ru", "en"})
 _MAX_NAME: Final = 256
 
 
@@ -100,12 +99,6 @@ class UserDirectory:
     def configured_owner_ids(self) -> frozenset[int]:
         raw = self._setting("OWNER_IDS", [])
         return frozenset(int(x) for x in raw if isinstance(x, int) and not isinstance(x, bool))
-
-    def _lang(self, stored: str | None) -> str:
-        if stored in SUPPORTED_LANGS:
-            return str(stored)
-        default = self._setting("DEFAULT_LANGUAGE", "ru")
-        return default if default in SUPPORTED_LANGS else "ru"
 
     # ------------------------------------------------------------------ cache
 
@@ -169,7 +162,6 @@ class UserDirectory:
             users.c.id,
             users.c.role,
             users.c.perms,
-            users.c.language,
             users.c.banned_at,
             users.c.captcha_passed_at,
             users.c.staff_role_id,
@@ -191,7 +183,6 @@ class UserDirectory:
             telegram_id=tg_user.id,
             role=role,
             perms=_perms(row["perms"]),
-            lang=self._lang(row["language"]),
             is_new=bool(row["inserted"]),
             currency=str(self._setting("CURRENCY", "RUB")),
             captcha_passed=row["captcha_passed_at"] is not None,
@@ -213,16 +204,6 @@ class UserDirectory:
         """The cached context of a Telegram user without any SQL (``None`` when not cached or expired)."""
         hit, ctx = self._cached(telegram_id)
         return ctx if hit else None
-
-    async def set_language(self, user_id: int, telegram_id: int | None, lang: str) -> bool:
-        """Store the user's language (one SQL) and drop the cached context. ``False`` for an unknown code."""
-        if lang not in SUPPORTED_LANGS:
-            return False
-        async with self._db.tx() as conn:
-            await conn.execute(sa.update(users).where(users.c.id == user_id).values(language=lang))
-        if telegram_id is not None:
-            self.invalidate(telegram_id)
-        return True
 
     async def mark_captcha_passed(self, user_id: int, telegram_id: int | None) -> bool:
         """Store that the user passed the entry captcha (the first time only) and drop the cached context.

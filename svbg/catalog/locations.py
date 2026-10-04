@@ -86,7 +86,7 @@ def _label(row: Mapping[str, Any] | None, uuid: str) -> str:
     if row is None:
         return uuid[:8]
     title = row["title"] if isinstance(row["title"], dict) else {}
-    name = next((v for v in title.values() if v), "") or row["panel_name"] or uuid[:8]
+    name = title.get("ru") or next((v for v in title.values() if v), "") or row["panel_name"] or uuid[:8]
     return f"{row['flag']} {name}" if row["flag"] else str(name)
 
 

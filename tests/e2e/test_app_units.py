@@ -115,7 +115,7 @@ async def test_owner_sink_without_owners_returns_none() -> None:
 
 class _Settings:
     def __init__(self, **values: Any) -> None:
-        self.values = {"OWNER_IDS": [], "DEFAULT_LANGUAGE": "ru", "CURRENCY": "RUB", **values}
+        self.values = {"OWNER_IDS": [], "CURRENCY": "RUB", **values}
 
     def current(self) -> dict[str, Any]:
         return self.values
@@ -291,6 +291,14 @@ def test_render_env_offline_keeps_values_and_unknown_keys(tmp_path: Path) -> Non
     assert doc.get("CUSTOM_THING") == "1"
     assert doc.get("LOG_LEVEL") == "INFO"
     assert render_env_offline(path, {}) == render_env_offline(path, {})  # deterministic
+
+
+def test_render_env_offline_drops_the_retired_language_keys(tmp_path: Path) -> None:
+    path = tmp_path / ".env"
+    path.write_text("DEFAULT_LANGUAGE=en\nI18N_AVAILABLE=ru,en\nTRIAL_DAYS=12\n", encoding="utf-8")
+    doc = EnvDocument.parse(render_env_offline(path, {}))
+    assert doc.get("TRIAL_DAYS") == "12"
+    assert doc.get("DEFAULT_LANGUAGE") is None and doc.get("I18N_AVAILABLE") is None
 
 
 def test_render_env_offline_marks_locked_keys(tmp_path: Path) -> None:
